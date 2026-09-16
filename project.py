@@ -7,7 +7,9 @@ from sklearn.ensemble import RandomForestClassifier
 import json
 import os
 import requests
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from googletrans import Translator
 
 load_dotenv()
 
@@ -296,7 +298,7 @@ def determine_route(origin_port, dest_port):
 # -------------------------------------------------------------
 ROUTE_DB = {
     "파나마 운하 (아시아-미주)": {
-        "news_keyword": "Panama Canal shipping",
+        "news_keyword": "Panama Canal",
         "standard_risk_factors": {"news_cnt": 15, "weather_dist_km": 300, "threat_level": 3},
         "ship_location": {"lat": 9.38, "lon": -79.92, "name": "파나마 운하 대기 구역"},
         "threat_zone": {"lat": 9.08, "lon": -79.68, "name": "가툰 호수 가뭄/통항 제한 구역"},
@@ -315,7 +317,7 @@ ROUTE_DB = {
         ]
     },
     "수에즈 / 홍해 (아시아-유럽)": {
-        "news_keyword": "Red Sea shipping attack",
+        "news_keyword": "Red Sea shipping",
         "standard_risk_factors": {"news_cnt": 28, "weather_dist_km": 800, "threat_level": 4},
         "ship_location": {"lat": 12.8, "lon": 44.5, "name": "아덴만 진입부"},
         "threat_zone": {"lat": 14.5, "lon": 42.5, "name": "홍해 남부 분쟁 위험 구역"},
@@ -334,7 +336,7 @@ ROUTE_DB = {
         ]
     },
     "호르무즈 해협 (중동-동아시아)": {
-        "news_keyword": "Strait of Hormuz tension",
+        "news_keyword": "Strait of Hormuz",
         "standard_risk_factors": {"news_cnt": 18, "weather_dist_km": 500, "threat_level": 4},
         "ship_location": {"lat": 26.5, "lon": 56.5, "name": "호르무즈 해협 진입부"},
         "threat_zone": {"lat": 26.8, "lon": 55.8, "name": "호르무즈 북부 군사 긴장 구역"},
@@ -353,7 +355,7 @@ ROUTE_DB = {
         ]
     },
     "말라카 해협 (동남아-동아시아)": {
-        "news_keyword": "Strait of Malacca shipping",
+        "news_keyword": "Strait of Malacca",
         "standard_risk_factors": {"news_cnt": 4, "weather_dist_km": 120, "threat_level": 2},
         "ship_location": {"lat": 2.5, "lon": 101.8, "name": "말라카 해협 중앙"},
         "threat_zone": {"lat": 4.0, "lon": 100.5, "name": "열대성 폭풍/해적 빈발 구역"},
@@ -370,14 +372,46 @@ ROUTE_DB = {
              "path_lat": [-6.0, -8.7, -6.0, -3.0, 2.0, 5.0, 10.0, 18.0, 25.0, 35.1],
              "path_lon": [105.5, 115.8, 119.0, 122.0, 124.0, 126.0, 127.0, 128.0, 128.5, 129.0]}
         ]
+    },
+    "북극항로 (아시아-유럽, 북동항로)": {
+        "news_keyword": "Arctic Northern Sea Route",
+        "standard_risk_factors": {"news_cnt": 10, "weather_dist_km": 400, "threat_level": 3},
+        "is_arctic": True,
+        "ship_location": {"lat": 73.0, "lon": 100.0, "name": "북극해 러시아 연안 항로 구간"},
+        "threat_zone": {"lat": 76.0, "lon": 90.0, "name": "해빙/제재 리스크 구역 (러시아 관할)"},
+        "standard_path": {
+            "lat": [35.1, 45.0, 55.0, 65.0, 70.0, 73.0, 76.0, 73.0, 68.0, 60.0, 51.9],
+            "lon": [129.0, 135.0, 140.0, 145.0, 130.0, 100.0, 70.0, 40.0, 20.0, 10.0, 4.3]
+        },
+        "alternatives": [
+            {"route_name": "우회: 수에즈 / 홍해 경유", "transit_time_days": 30, "cost_index_pct": 115, "safety_score": 75,
+             "war_risk_insurance": "일반 요율",
+             "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
+             "status": "표준 대체로",
+             "recommendation_reason": "북극항로 결빙/제재 리스크 회피, 연중 안정적으로 운항 가능한 검증된 항로.",
+             "path_lat": [35.1, 25.0, 15.0, 5.0, 1.3, 5.0, 12.5, 16.0, 20.0, 27.0, 31.0, 34.0, 36.0, 40.0, 45.0, 51.9],
+             "path_lon": [129.0, 120.0, 110.0, 105.0, 103.8, 90.0, 44.0, 40.0, 38.0, 34.0, 32.3, 20.0, -5.6, -12.0, -8.0, 4.3]}
+        ]
     }
 }
 
 def calc_rule_score(news_cnt, weather_dist, threat_level):
     return min(100, int((news_cnt * 1.2) + max(0, (600 - weather_dist) * 0.08) + (threat_level * 10)))
 
+def get_arctic_season_info():
+    """북극항로 계절별 항해 가능 여부 판단 (실제 NSR 운항 패턴 기준)"""
+    month = datetime.now().month
+    if month in [8, 9]:
+        return 1, "해빙 최소기 — 항해 최적 시즌 (쇄빙선 지원 없이도 가능)"
+    elif month in [7, 10]:
+        return 2, "해빙 감소기 — 항해 가능하나 쇄빙선 에스코트 권장"
+    elif month in [6, 11]:
+        return 4, "해빙 전환기 — 항해 난도 급상승, 쇄빙선 필수"
+    else:
+        return 5, "결빙기 (12~5월) — 두꺼운 해빙으로 상업 운항 사실상 불가"
+
 # -------------------------------------------------------------
-# 모델 & 뉴스
+# 모델
 # -------------------------------------------------------------
 @st.cache_resource
 def get_trained_risk_model():
@@ -392,20 +426,141 @@ def get_trained_risk_model():
 
 model = get_trained_risk_model()
 
+# -------------------------------------------------------------
+# 뉴스: 실제 기사 가져오기 (번역 + 출처)
+# -------------------------------------------------------------
 @st.cache_data(ttl=600)
-def fetch_news(query, display=3):
+def fetch_news(query, display=6):
     api_key = os.getenv("NEWSAPI_KEY")
     if not api_key:
         return None
     url = "https://newsapi.org/v2/everything"
-    params = {"q": f'"{query}"', "language": "en", "sortBy": "publishedAt", "pageSize": display, "apiKey": api_key}
+    params = {"q": query, "language": "en", "sortBy": "relevancy", "pageSize": display, "apiKey": api_key}
     try:
-        res = requests.get(url, params=params, timeout=5)
+        res = requests.get(url, params=params, timeout=8)
         res.raise_for_status()
         articles = res.json().get("articles", [])
-        return [{"title": a["title"], "link": a["url"], "desc": a.get("description", "") or ""} for a in articles]
-    except Exception:
+        results = []
+        translator = Translator()
+        for a in articles:
+            title_en = a.get("title") or ""
+            desc_en = a.get("description") or ""
+            source_name = (a.get("source") or {}).get("name", "출처 미상")
+
+            title_ko = title_en
+            desc_ko = desc_en
+
+            if title_en:
+                try:
+                    title_ko = translator.translate(title_en[:500], src="en", dest="ko").text
+                except Exception:
+                    title_ko = title_en
+
+            if desc_en:
+                try:
+                    desc_ko = translator.translate(desc_en[:500], src="en", dest="ko").text
+                except Exception:
+                    desc_ko = desc_en
+
+            results.append({
+                "title": title_ko,
+                "link": a.get("url", "#"),
+                "desc": desc_ko,
+                "source": source_name
+            })
+        return results
+    except Exception as e:
+        st.sidebar.error(f"뉴스 가져오기 실패: {e}")
         return []
+
+# -------------------------------------------------------------
+# 뉴스: 건수 자동 집계
+# -------------------------------------------------------------
+@st.cache_data(ttl=600)
+def fetch_news_count(query):
+    api_key = os.getenv("NEWSAPI_KEY")
+    if not api_key:
+        return None, None
+    url = "https://newsapi.org/v2/everything"
+    today = datetime.now()
+    try:
+        p_recent = {
+            "q": query, "language": "en",
+            "from": (today - timedelta(days=7)).strftime("%Y-%m-%d"),
+            "to": today.strftime("%Y-%m-%d"),
+            "pageSize": 1,
+            "apiKey": api_key
+        }
+        p_prev = {
+            "q": query, "language": "en",
+            "from": (today - timedelta(days=14)).strftime("%Y-%m-%d"),
+            "to": (today - timedelta(days=7)).strftime("%Y-%m-%d"),
+            "pageSize": 1,
+            "apiKey": api_key
+        }
+        r_recent = requests.get(url, params=p_recent, timeout=8).json().get("totalResults", 0)
+        r_prev = requests.get(url, params=p_prev, timeout=8).json().get("totalResults", 0)
+        growth = int(((r_recent - r_prev) / max(r_prev, 1)) * 100)
+        return r_recent, growth
+    except Exception as e:
+        st.sidebar.error(f"뉴스 건수 집계 실패: {e}")
+        return None, None
+
+# -------------------------------------------------------------
+# 뉴스: 종합 상황 브리핑 생성
+# -------------------------------------------------------------
+@st.cache_data(ttl=600)
+def summarize_news_situation(query):
+    """수집된 뉴스 제목/설명을 모아 종합 상황 브리핑 생성 (규칙 기반 요약)"""
+    api_key = os.getenv("NEWSAPI_KEY")
+    if not api_key:
+        return None
+    url = "https://newsapi.org/v2/everything"
+    params = {"q": query, "language": "en", "sortBy": "relevancy", "pageSize": 10, "apiKey": api_key}
+    try:
+        res = requests.get(url, params=params, timeout=8)
+        res.raise_for_status()
+        articles = res.json().get("articles", [])
+        if not articles:
+            return None
+
+        all_text = " ".join([(a.get("title") or "") + " " + (a.get("description") or "") for a in articles]).lower()
+
+        keywords = {
+            "공격/충돌": ["attack", "strike", "clash", "military", "missile"],
+            "봉쇄/장악": ["seize", "blockade", "control", "capture", "takeover"],
+            "제재": ["sanction", "embargo"],
+            "기상 악화": ["storm", "typhoon", "hurricane", "ice", "flood"],
+            "지연/정체": ["delay", "congestion", "backlog", "queue"],
+        }
+        detected = []
+        for label, words in keywords.items():
+            count = sum(all_text.count(w) for w in words)
+            if count > 0:
+                detected.append((label, count))
+        detected.sort(key=lambda x: x[1], reverse=True)
+
+        recent_facts_en = []
+        for a in articles[:3]:
+            desc = a.get("description") or a.get("title") or ""
+            if desc:
+                recent_facts_en.append(desc.strip())
+
+        translator = Translator()
+        recent_facts = []
+        for fact in recent_facts_en:
+            try:
+                recent_facts.append(translator.translate(fact[:400], src="en", dest="ko").text)
+            except Exception:
+                recent_facts.append(fact)
+
+        return {
+            "detected_issues": detected[:3],
+            "recent_facts": recent_facts,
+            "article_count": len(articles)
+        }
+    except Exception:
+        return None
 
 def predict_risk(news_cnt, weather_dist, news_growth, threat_level):
     features = np.array([[news_cnt, weather_dist, news_growth, threat_level]])
@@ -436,10 +591,36 @@ else:
 st.sidebar.divider()
 st.sidebar.subheader("위협 감지 파라미터 (선택 항로 기준)")
 curr_route_data = ROUTE_DB[selected_route_key]
-news_count = st.sidebar.slider("분쟁/이슈 뉴스 건수", 0, 60, curr_route_data["standard_risk_factors"]["news_cnt"])
-news_growth = st.sidebar.slider("뉴스량 전일 대비 증가율 (%)", -50, 200, 40)
+
+auto_news_cnt, auto_news_growth = fetch_news_count(curr_route_data["news_keyword"])
+
+if auto_news_cnt is not None:
+    st.sidebar.caption(f"📡 실시간 자동 집계: {auto_news_cnt}건 (증가율 {auto_news_growth:+d}%)")
+    use_auto = st.sidebar.checkbox("자동 집계값 사용", value=True)
+else:
+    use_auto = False
+    st.sidebar.caption("⚠ 자동 집계 실패 — 수동 입력을 사용합니다")
+
+if use_auto and auto_news_cnt is not None:
+    news_count = min(auto_news_cnt, 60)
+    news_growth = max(min(auto_news_growth, 200), -50)
+    c1, c2 = st.sidebar.columns(2)
+    c1.metric("뉴스 건수(자동)", news_count)
+    c2.metric("증가율(자동)", f"{news_growth:+d}%")
+else:
+    news_count = st.sidebar.slider("분쟁/이슈 뉴스 건수 (수동)", 0, 60, curr_route_data["standard_risk_factors"]["news_cnt"])
+    news_growth = st.sidebar.slider("뉴스량 전일 대비 증가율 (수동, %)", -50, 200, 40)
+
 weather_distance = st.sidebar.slider("기상/위협 최근접 거리 (km)", 50, 1200, curr_route_data["standard_risk_factors"]["weather_dist_km"])
-geopolitical_level = st.sidebar.select_slider("지정학적 위협 텐션 지수", options=[1,2,3,4,5], value=curr_route_data["standard_risk_factors"]["threat_level"])
+
+arctic_season_level, arctic_season_msg = get_arctic_season_info()
+
+if curr_route_data.get("is_arctic", False):
+    st.sidebar.info(f"🧊 계절 자동 반영: {arctic_season_msg}")
+    geopolitical_level = arctic_season_level
+    st.sidebar.metric("지정학/계절 텐션 지수 (자동)", f"{geopolitical_level}/5")
+else:
+    geopolitical_level = st.sidebar.select_slider("지정학적 위협 텐션 지수", options=[1,2,3,4,5], value=curr_route_data["standard_risk_factors"]["threat_level"])
 
 alert_email = st.sidebar.text_input("비상 알림 수신 이메일", value="shipping_ops@trade.com")
 send_alert_btn = st.sidebar.button("비상 알림 수동 발송")
@@ -474,11 +655,14 @@ else:
 # -------------------------------------------------------------
 route_risk_summary = {}
 for key, data in ROUTE_DB.items():
+    is_arctic = data.get("is_arctic", False)
     if key == selected_route_key:
-        n, w, g, t = news_count, weather_distance, news_growth, geopolitical_level
+        n, w, g = news_count, weather_distance, news_growth
+        t = arctic_season_level if is_arctic else geopolitical_level
     else:
         f = data["standard_risk_factors"]
-        n, w, g, t = f["news_cnt"], f["weather_dist_km"], 0, f["threat_level"]
+        n, w, g = f["news_cnt"], f["weather_dist_km"], 0
+        t = arctic_season_level if is_arctic else f["threat_level"]
     pred, prob = predict_risk(n, w, g, t)
     route_risk_summary[key] = {"pred": pred, "prob": prob, "rule": calc_rule_score(n, w, t)}
 
@@ -664,14 +848,43 @@ with col_status:
             st.error(f"🔴 심각 등급 — {threat_loc['name']} 인근 위협 감지")
         else:
             st.warning(f"🟡 경고 등급 — {threat_loc['name']} 인근 리스크 상승")
-        st.markdown(f"""
-**우려 요인**
-- 관련 뉴스: **{news_count}건** (전일 대비 {news_growth:+d}%)
-- 위협 최근접 거리: **{weather_distance}km**
-- 지정학적 텐션: **{geopolitical_level}/5**
 
-**권장 조치**: **[{best_alt['route_name']}]** 전환 검토
-""")
+        st.markdown(f"""
+<div style='color:#f1f5f9; line-height:1.9;'>
+<b style='color:#ffffff; font-size:1.05rem;'>우려 요인</b><br>
+• 관련 뉴스: <b style='color:#fbbf24;'>{news_count}건</b> (전일 대비 {news_growth:+d}%)<br>
+• 위협 최근접 거리: <b style='color:#fbbf24;'>{weather_distance}km</b><br>
+• 지정학적 텐션: <b style='color:#fbbf24;'>{geopolitical_level}/5</b><br><br>
+<b style='color:#ffffff; font-size:1.05rem;'>권장 조치</b>: <span style='color:#38bdf8;'>{best_alt['route_name']}</span> 전환 검토
+</div>
+""", unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top:18px;'></div>", unsafe_allow_html=True)
+        st.markdown("<b style='color:#ffffff; font-size:1.05rem;'>📋 종합 상황 브리핑</b>", unsafe_allow_html=True)
+
+        briefing = summarize_news_situation(curr_data["news_keyword"])
+        if briefing:
+            issue_labels = ", ".join([f"{label}({cnt}회 언급)" for label, cnt in briefing["detected_issues"]]) if briefing["detected_issues"] else "특정 유형 미확인"
+            facts_html = "".join([
+                f"<div style='color:#cbd5e1; margin:6px 0; padding-left:10px; border-left:3px solid #3b82f6;'>{i}. {fact}</div>"
+                for i, fact in enumerate(briefing["recent_facts"], 1)
+            ])
+            st.markdown(f"""
+<div style='color:#f1f5f9; line-height:1.85; background:#1e293b; padding:14px 18px; border-radius:10px; border:1px solid #334155; margin-top:6px;'>
+<b style='color:#fbbf24;'>탐지된 이슈 유형:</b> {issue_labels}<br>
+<b style='color:#fbbf24;'>수집 기사 수:</b> {briefing['article_count']}건 (최근 순 분석)<br><br>
+<b style='color:#ffffff;'>현재 상황 요약</b>
+{facts_html}
+<br><b style='color:#ffffff;'>예상 영향</b><br>
+<div style='color:#cbd5e1;'>
+현재 감지된 이슈가 지속될 경우, <b style='color:#f87171;'>{selected_route_key}</b> 구간의 통항 지연, 운임 상승(전쟁보험료 할증 포함),
+안전 우려로 인한 항로 이탈이 발생할 수 있습니다. {ship_nationality} 국적 선박은 위 대체 루트 목록의 통행 가능 여부를 반드시 확인 후
+항로 결정을 내리시기 바랍니다.
+</div>
+</div>
+""", unsafe_allow_html=True)
+        else:
+            st.caption("종합 브리핑을 생성할 뉴스 데이터가 부족합니다.")
     else:
         st.success("🟢 정상 운항 상태입니다.")
 
@@ -681,11 +894,11 @@ with col_news:
     if news_items is None:
         st.caption("NewsAPI 키 미설정")
     elif not news_items:
-        st.caption("관련 뉴스 없음")
+        st.caption("관련 뉴스를 가져오지 못했습니다.")
     else:
         for n in news_items:
             st.markdown(f"**[{n['title']}]({n['link']})**")
-            st.caption((n["desc"] or "")[:90] + "...")
+            st.caption(f"📰 {n['source']} · " + (n["desc"] or "")[:80] + "...")
 
 # -------------------------------------------------------------
 # 리스크 점수 추이 (30일)
