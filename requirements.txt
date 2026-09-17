@@ -6,4 +6,5 @@ scikit-learn
 python-dotenv
 websockets
 requests
-deep-translator
+googletrans==4.0.0-rc1
+legacy-cgi
