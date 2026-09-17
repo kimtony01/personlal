@@ -44,3 +44,6 @@ jobs:
           git add ship_data.json ship_history.json
           git diff --quiet --cached || git commit -m "자동 수집: 선박 위치 업데이트 ($(date -u +'%Y-%m-%d %H:%M UTC'))"
           git push
+
+          # 123
+          
