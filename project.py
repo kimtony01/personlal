@@ -9,7 +9,7 @@ import os
 import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
 load_dotenv()
 
@@ -427,6 +427,18 @@ def get_trained_risk_model():
 model = get_trained_risk_model()
 
 # -------------------------------------------------------------
+# 번역 헬퍼 (deep_translator 사용)
+# -------------------------------------------------------------
+def translate_to_ko(text, max_len=500):
+    """영어 텍스트를 한국어로 번역. 실패 시 원문 그대로 반환."""
+    if not text:
+        return text
+    try:
+        return GoogleTranslator(source="en", target="ko").translate(text[:max_len])
+    except Exception:
+        return text
+
+# -------------------------------------------------------------
 # 뉴스: 실제 기사 가져오기 (번역 + 출처)
 # -------------------------------------------------------------
 @st.cache_data(ttl=600)
@@ -441,26 +453,13 @@ def fetch_news(query, display=6):
         res.raise_for_status()
         articles = res.json().get("articles", [])
         results = []
-        translator = Translator()
         for a in articles:
             title_en = a.get("title") or ""
             desc_en = a.get("description") or ""
             source_name = (a.get("source") or {}).get("name", "출처 미상")
 
-            title_ko = title_en
-            desc_ko = desc_en
-
-            if title_en:
-                try:
-                    title_ko = translator.translate(title_en[:500], src="en", dest="ko").text
-                except Exception:
-                    title_ko = title_en
-
-            if desc_en:
-                try:
-                    desc_ko = translator.translate(desc_en[:500], src="en", dest="ko").text
-                except Exception:
-                    desc_ko = desc_en
+            title_ko = translate_to_ko(title_en)
+            desc_ko = translate_to_ko(desc_en)
 
             results.append({
                 "title": title_ko,
@@ -546,13 +545,7 @@ def summarize_news_situation(query):
             if desc:
                 recent_facts_en.append(desc.strip())
 
-        translator = Translator()
-        recent_facts = []
-        for fact in recent_facts_en:
-            try:
-                recent_facts.append(translator.translate(fact[:400], src="en", dest="ko").text)
-            except Exception:
-                recent_facts.append(fact)
+        recent_facts = [translate_to_ko(fact, max_len=400) for fact in recent_facts_en]
 
         return {
             "detected_issues": detected[:3],
