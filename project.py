@@ -9,7 +9,7 @@ import os
 import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from deep_translator import GoogleTranslator
+from googletrans import Translator
 
 load_dotenv()
 
@@ -20,39 +20,78 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
-# 스타일
+# 스타일 (라이트 SaaS 대시보드 테마)
 # -------------------------------------------------------------
 st.markdown("""
 <style>
-    .stApp { background-color: #0f172a; }
-    h1 { color: #f8fafc !important; font-weight: 800 !important; letter-spacing: -0.5px; }
-    h2, h3 { color: #e2e8f0 !important; font-weight: 700 !important; }
-    .stCaption, p, span, label { color: #94a3b8 !important; }
+    .stApp { background-color: #f8fafc; }
+    h1 { color: #0f172a !important; font-weight: 800 !important; letter-spacing: -0.5px; }
+    h2, h3 { color: #0f172a !important; font-weight: 700 !important; }
+    .stCaption, p, span, label { color: #64748b !important; }
+
+    /* 상단 헤더 바 */
+    .app-header {
+        display: flex; align-items: center; justify-content: space-between;
+        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;
+        padding: 18px 26px; margin-bottom: 22px;
+        box-shadow: 0 1px 3px rgba(15,23,42,0.06);
+    }
+    .app-header .brand { display: flex; align-items: center; gap: 12px; }
+    .app-header .brand-icon {
+        width: 38px; height: 38px; border-radius: 10px;
+        background: linear-gradient(135deg, #2563eb, #38bdf8);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 1.2rem;
+    }
+    .app-header .brand-title { color: #0f172a; font-weight: 800; font-size: 1.25rem; letter-spacing: -0.3px; }
+    .app-header .brand-sub { color: #94a3b8; font-size: 0.8rem; margin-top: -2px; }
+    .app-header .status-pill {
+        padding: 6px 16px; border-radius: 999px; font-weight: 700; font-size: 0.85rem;
+        border: 1px solid transparent;
+    }
+
+    /* 카드형 메트릭 */
     div[data-testid="stMetric"] {
-        background: linear-gradient(145deg, #1e293b, #172033);
-        border: 1px solid #334155; border-radius: 14px;
-        padding: 18px 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        background: #ffffff;
+        border: 1px solid #e2e8f0; border-radius: 14px;
+        padding: 16px 20px; box-shadow: 0 1px 3px rgba(15,23,42,0.05);
     }
-    div[data-testid="stMetricLabel"] { color: #94a3b8 !important; font-size: 0.85rem !important; }
-    div[data-testid="stMetricValue"] { color: #f8fafc !important; font-weight: 800 !important; }
-    section[data-testid="stSidebar"] { background-color: #0b1220; border-right: 1px solid #1e293b; }
+    div[data-testid="stMetricLabel"] { color: #64748b !important; font-size: 0.82rem !important; font-weight: 600 !important; }
+    div[data-testid="stMetricValue"] { color: #0f172a !important; font-weight: 800 !important; }
+
+    section[data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #e2e8f0; }
     section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
-        color: #f8fafc !important; font-size: 1.0rem !important;
+        color: #0f172a !important; font-size: 1.0rem !important;
     }
-    div[data-testid="stAlert"] { border-radius: 12px; border: none; }
+    section[data-testid="stSidebar"] .stCaption, section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label { color: #64748b !important; }
+
+    div[data-testid="stAlert"] { border-radius: 12px; border: 1px solid #e2e8f0; }
     div[data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: #1e293b; border-radius: 14px; border: 1px solid #334155; padding: 8px 4px;
+        background-color: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; padding: 8px 4px;
+        box-shadow: 0 1px 3px rgba(15,23,42,0.05);
     }
-    hr { border-color: #1e293b !important; }
+    hr { border-color: #e2e8f0 !important; }
     .stButton button {
-        background-color: #3b82f6; color: white; border-radius: 10px; border: none; font-weight: 600;
+        background-color: #2563eb; color: white; border-radius: 10px; border: none; font-weight: 600;
     }
-    .stButton button:hover { background-color: #2563eb; }
-    div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
-    a { color: #60a5fa !important; text-decoration: none !important; }
+    .stButton button:hover { background-color: #1d4ed8; }
+    div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; }
+    a { color: #2563eb !important; text-decoration: none !important; font-weight: 600; }
+
+    /* 뉴스/상황 카드 */
+    .info-card {
+        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px;
+        padding: 18px 20px; box-shadow: 0 1px 3px rgba(15,23,42,0.05);
+    }
+    .news-card {
+        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;
+        padding: 12px 16px; margin-bottom: 10px;
+    }
     .risk-badge {
         display: inline-block; padding: 4px 14px; border-radius: 20px;
-        font-size: 0.85rem; font-weight: 600; margin-top: 6px;
+        font-size: 0.85rem; font-weight: 700; margin-top: 6px;
+        border: 1px solid transparent;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -369,7 +408,7 @@ ROUTE_DB = {
              "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
              "status": "기상 회피안",
              "recommendation_reason": "초강력 태풍 발생 시 동인도네시아 심해 수로로 안전 항해.",
-             "path_lat": [-6.0, -8.7, -6.0, -3.0, 2.0, 5.0, 10.0, 18.0, 25.0, 35.1],
+                          "path_lat": [-6.0, -8.7, -6.0, -3.0, 2.0, 5.0, 10.0, 18.0, 25.0, 35.1],
              "path_lon": [105.5, 115.8, 119.0, 122.0, 124.0, 126.0, 127.0, 128.0, 128.5, 129.0]}
         ]
     },
@@ -397,7 +436,6 @@ ROUTE_DB = {
 
 def calc_rule_score(news_cnt, weather_dist, threat_level):
     return min(100, int((news_cnt * 1.2) + max(0, (600 - weather_dist) * 0.08) + (threat_level * 10)))
-
 def get_arctic_season_info():
     """북극항로 계절별 항해 가능 여부 판단 (실제 NSR 운항 패턴 기준)"""
     month = datetime.now().month
@@ -427,19 +465,7 @@ def get_trained_risk_model():
 model = get_trained_risk_model()
 
 # -------------------------------------------------------------
-# 번역 헬퍼 (deep_translator 사용)
-# -------------------------------------------------------------
-def translate_to_ko(text, max_len=500):
-    """영어 텍스트를 한국어로 번역. 실패 시 원문 그대로 반환."""
-    if not text:
-        return text
-    try:
-        return GoogleTranslator(source="en", target="ko").translate(text[:max_len])
-    except Exception:
-        return text
-
-# -------------------------------------------------------------
-# 뉴스: 실제 기사 가져오기 (번역 + 출처)
+# 뉴스: 실제 기사 가져오기 (번역 + 출처, 실패시 화면에 직접 에러 표시)
 # -------------------------------------------------------------
 @st.cache_data(ttl=600)
 def fetch_news(query, display=6):
@@ -453,13 +479,26 @@ def fetch_news(query, display=6):
         res.raise_for_status()
         articles = res.json().get("articles", [])
         results = []
+        translator = Translator()
         for a in articles:
             title_en = a.get("title") or ""
             desc_en = a.get("description") or ""
             source_name = (a.get("source") or {}).get("name", "출처 미상")
 
-            title_ko = translate_to_ko(title_en)
-            desc_ko = translate_to_ko(desc_en)
+            title_ko = title_en
+            desc_ko = desc_en
+
+            if title_en:
+                try:
+                    title_ko = translator.translate(title_en[:500], src="en", dest="ko").text
+                except Exception as e:
+                    st.sidebar.error(f"번역 실패(제목): {e}")
+
+            if desc_en:
+                try:
+                    desc_ko = translator.translate(desc_en[:500], src="en", dest="ko").text
+                except Exception as e:
+                    st.sidebar.error(f"번역 실패(본문): {e}")
 
             results.append({
                 "title": title_ko,
@@ -505,61 +544,46 @@ def fetch_news_count(query):
         st.sidebar.error(f"뉴스 건수 집계 실패: {e}")
         return None, None
 
-# -------------------------------------------------------------
-# 뉴스: 종합 상황 브리핑 생성
-# -------------------------------------------------------------
-@st.cache_data(ttl=600)
-def summarize_news_situation(query):
-    """수집된 뉴스 제목/설명을 모아 종합 상황 브리핑 생성 (규칙 기반 요약)"""
-    api_key = os.getenv("NEWSAPI_KEY")
-    if not api_key:
-        return None
-    url = "https://newsapi.org/v2/everything"
-    params = {"q": query, "language": "en", "sortBy": "relevancy", "pageSize": 10, "apiKey": api_key}
-    try:
-        res = requests.get(url, params=params, timeout=8)
-        res.raise_for_status()
-        articles = res.json().get("articles", [])
-        if not articles:
-            return None
-
-        all_text = " ".join([(a.get("title") or "") + " " + (a.get("description") or "") for a in articles]).lower()
-
-        keywords = {
-            "공격/충돌": ["attack", "strike", "clash", "military", "missile"],
-            "봉쇄/장악": ["seize", "blockade", "control", "capture", "takeover"],
-            "제재": ["sanction", "embargo"],
-            "기상 악화": ["storm", "typhoon", "hurricane", "ice", "flood"],
-            "지연/정체": ["delay", "congestion", "backlog", "queue"],
-        }
-        detected = []
-        for label, words in keywords.items():
-            count = sum(all_text.count(w) for w in words)
-            if count > 0:
-                detected.append((label, count))
-        detected.sort(key=lambda x: x[1], reverse=True)
-
-        recent_facts_en = []
-        for a in articles[:3]:
-            desc = a.get("description") or a.get("title") or ""
-            if desc:
-                recent_facts_en.append(desc.strip())
-
-        recent_facts = [translate_to_ko(fact, max_len=400) for fact in recent_facts_en]
-
-        return {
-            "detected_issues": detected[:3],
-            "recent_facts": recent_facts,
-            "article_count": len(articles)
-        }
-    except Exception:
-        return None
-
 def predict_risk(news_cnt, weather_dist, news_growth, threat_level):
     features = np.array([[news_cnt, weather_dist, news_growth, threat_level]])
     pred = model.predict(features)[0]
     prob = model.predict_proba(features)[0]
     return pred, prob
+
+# -------------------------------------------------------------
+# 뉴스 종합 요약 (키워드 기반 이슈 탐지)
+# -------------------------------------------------------------
+ISSUE_KEYWORDS_KO = {
+    "공격/충돌": ["공격", "충돌", "드론", "폭격", "미사일", "전격", "타격"],
+    "봉쇄/장악": ["봉쇄", "장악", "통제", "폐쇄", "차단"],
+    "제재": ["제재", "금수"],
+    "기상 악화": ["폭풍", "태풍", "허리케인", "기상", "해일"],
+    "지연/정체": ["지연", "정체", "대기", "혼잡"],
+}
+
+def summarize_news_situation(news_items, route_name):
+    if not news_items:
+        return None
+
+    combined = " ".join([(n.get("title") or "") + " " + (n.get("desc") or "") for n in news_items])
+
+    detected = []
+    for issue, keywords in ISSUE_KEYWORDS_KO.items():
+        hits = sum(combined.count(k) for k in keywords)
+        if hits > 0:
+            detected.append((issue, hits))
+    detected.sort(key=lambda x: -x[1])
+    top_issues = [d[0] for d in detected[:3]]
+
+    source_count = len(set(n.get("source", "") for n in news_items if n.get("source")))
+    issue_text = ", ".join(top_issues) if top_issues else "뚜렷한 위협 이슈 없음 (일상적 운항 관련 보도 위주)"
+
+    return {
+        "article_count": len(news_items),
+        "source_count": source_count,
+        "issue_text": issue_text,
+        "headline": news_items[0]["title"] if news_items else "",
+    }
 
 # -------------------------------------------------------------
 # 사이드바
@@ -683,7 +707,27 @@ best_alt = scored_alternatives[0] if scored_alternatives else None
 # -------------------------------------------------------------
 # 메인 화면
 # -------------------------------------------------------------
-st.title("🌊 해상 항로 리스크 조기경보 시스템")
+pill_bg, pill_color = {
+    0: ("#dcfce7", "#15803d"),
+    1: ("#fef3c7", "#b45309"),
+    2: ("#fee2e2", "#b91c1c"),
+}[sel_pred]
+
+st.markdown(f"""
+<div class="app-header">
+    <div class="brand">
+        <div class="brand-icon">🌊</div>
+        <div>
+            <div class="brand-title">해상 항로 리스크 조기경보 시스템</div>
+            <div class="brand-sub">Maritime Route Risk Early Warning &amp; Alternative Route Recommendation</div>
+        </div>
+    </div>
+    <div class="status-pill" style="background:{pill_bg}; color:{pill_color};">
+        {selected_route_key.split(' (')[0]} · {risk_level_str}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 st.info(f"👈 사이드바에서 출발항/도착항을 선택하면 자동으로 항로가 판단됩니다. 현재 선택: **{selected_route_key}**")
 
 col1, col2, col3, col4 = st.columns(4)
@@ -725,17 +769,17 @@ for key, data in ROUTE_DB.items():
         marker=dict(size=26 if is_selected else 18, color=status_color[risk["pred"]],
                     line=dict(width=3 if is_selected else 1, color="white")),
         text=[key.split(" (")[0]], textposition="top center",
-        textfont=dict(color="#f8fafc", size=11),
+        textfont=dict(color="#0f172a", size=11),
         name=f"{key} — {status_label[risk['pred']]}",
         hovertext=f"{key}<br>상태: {status_label[risk['pred']]}", hoverinfo="text"
     ))
 
 fig_world.update_layout(
-    geo=dict(projection_type="natural earth", showland=True, landcolor="rgb(30,41,59)",
-        oceancolor="rgb(15,23,42)", showocean=True, showcoastlines=True, coastlinecolor="rgb(71,85,105)",
-        showcountries=True, countrycolor="rgb(51,65,85)", bgcolor="rgba(0,0,0,0)"),
+    geo=dict(projection_type="natural earth", showland=True, landcolor="rgb(226,232,240)",
+        oceancolor="rgb(248,250,252)", showocean=True, showcoastlines=True, coastlinecolor="rgb(203,213,225)",
+        showcountries=True, countrycolor="rgb(203,213,225)", bgcolor="rgba(0,0,0,0)", lakecolor="rgb(248,250,252)"),
     paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=10,b=0), height=480,
-    legend=dict(orientation="h", yanchor="bottom", y=-0.1, font=dict(color="#e2e8f0", size=11))
+    legend=dict(orientation="h", yanchor="bottom", y=-0.1, font=dict(color="#0f172a", size=11))
 )
 st.plotly_chart(fig_world, use_container_width=True)
 
@@ -764,13 +808,13 @@ threat_color = "#ef4444" if ALERT_TRIGGERED else "#64748b"
 fig_detail.add_trace(go.Scattergeo(
     lat=[threat_loc["lat"]], lon=[threat_loc["lon"]], mode="markers+text",
     marker=dict(size=22, color=threat_color), text=[threat_loc["name"]],
-    textposition="top center", textfont=dict(color="#f8fafc"),
+    textposition="top center", textfont=dict(color="#0f172a"),
     name="⚠ 위협 감지 구역" if ALERT_TRIGGERED else "모니터링 구역"
 ))
 fig_detail.add_trace(go.Scattergeo(
     lat=[ship_loc["lat"]], lon=[ship_loc["lon"]], mode="markers+text",
-    marker=dict(size=16, color="#ffc107", symbol="triangle-up"), text=[ship_name],
-    textposition="bottom center", textfont=dict(color="#f8fafc"), name="시나리오 선박"
+    marker=dict(size=16, color="#f59e0b", symbol="triangle-up"), text=[ship_name],
+    textposition="bottom center", textfont=dict(color="#0f172a"), name="시나리오 선박"
 ))
 if ALERT_TRIGGERED and best_alt:
     fig_detail.add_trace(go.Scattergeo(
@@ -798,8 +842,8 @@ if real_ship_data:
 
     if my_lat:
         fig_detail.add_trace(go.Scattergeo(lat=[my_lat], lon=[my_lon], mode="markers+text",
-            marker=dict(size=18, color="red", symbol="star", line=dict(width=2, color="white")),
-            text=[my_name], textposition="top center", textfont=dict(color="#f8fafc"), name="내 지정 선박"))
+            marker=dict(size=18, color="#dc2626", symbol="star", line=dict(width=2, color="white")),
+            text=[my_name], textposition="top center", textfont=dict(color="#0f172a"), name="내 지정 선박"))
 
         if os.path.exists("ship_history.json"):
             with open("ship_history.json", "r", encoding="utf-8") as f:
@@ -819,12 +863,12 @@ if real_ship_data:
                     st.caption(f"⚠ {my_name}의 이동 항적은 {len(track)}개 지점만 수집됨 — collector.py를 여러 번 더 실행하면 실제 항적이 그려집니다.")
 
 fig_detail.update_layout(
-    geo=dict(projection_type="equirectangular", showland=True, landcolor="rgb(30,41,59)",
-        oceancolor="rgb(15,23,42)", showocean=True, showcoastlines=True, coastlinecolor="rgb(71,85,105)",
-        showcountries=True, countrycolor="rgb(51,65,85)",
+    geo=dict(projection_type="equirectangular", showland=True, landcolor="rgb(226,232,240)",
+        oceancolor="rgb(248,250,252)", showocean=True, showcoastlines=True, coastlinecolor="rgb(203,213,225)",
+        showcountries=True, countrycolor="rgb(203,213,225)",
         center=dict(lat=ship_loc["lat"], lon=ship_loc["lon"]), projection_scale=2.2, bgcolor="rgba(0,0,0,0)"),
     paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=10,b=0), height=550,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(color="#e2e8f0"))
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(color="#0f172a"))
 )
 st.plotly_chart(fig_detail, use_container_width=True)
 
@@ -832,6 +876,7 @@ st.plotly_chart(fig_detail, use_container_width=True)
 # 상황판단 + 뉴스
 # -------------------------------------------------------------
 st.divider()
+news_items = fetch_news(curr_data["news_keyword"])
 col_status, col_news = st.columns([1.3, 1])
 
 with col_status:
@@ -843,55 +888,43 @@ with col_status:
             st.warning(f"🟡 경고 등급 — {threat_loc['name']} 인근 리스크 상승")
 
         st.markdown(f"""
-<div style='color:#f1f5f9; line-height:1.9;'>
-<b style='color:#ffffff; font-size:1.05rem;'>우려 요인</b><br>
-• 관련 뉴스: <b style='color:#fbbf24;'>{news_count}건</b> (전일 대비 {news_growth:+d}%)<br>
-• 위협 최근접 거리: <b style='color:#fbbf24;'>{weather_distance}km</b><br>
-• 지정학적 텐션: <b style='color:#fbbf24;'>{geopolitical_level}/5</b><br><br>
-<b style='color:#ffffff; font-size:1.05rem;'>권장 조치</b>: <span style='color:#38bdf8;'>{best_alt['route_name']}</span> 전환 검토
+<div class="info-card" style='color:#334155; line-height:1.9;'>
+<b style='color:#0f172a; font-size:1.05rem;'>우려 요인</b><br>
+• 관련 뉴스: <b style='color:#d97706;'>{news_count}건</b> (전일 대비 {news_growth:+d}%)<br>
+• 위협 최근접 거리: <b style='color:#d97706;'>{weather_distance}km</b><br>
+• 지정학적 텐션: <b style='color:#d97706;'>{geopolitical_level}/5</b><br><br>
+<b style='color:#0f172a; font-size:1.05rem;'>권장 조치</b>: <span style='color:#2563eb;'>{best_alt['route_name']}</span> 전환 검토
 </div>
 """, unsafe_allow_html=True)
-
-        st.markdown("<div style='margin-top:18px;'></div>", unsafe_allow_html=True)
-        st.markdown("<b style='color:#ffffff; font-size:1.05rem;'>📋 종합 상황 브리핑</b>", unsafe_allow_html=True)
-
-        briefing = summarize_news_situation(curr_data["news_keyword"])
-        if briefing:
-            issue_labels = ", ".join([f"{label}({cnt}회 언급)" for label, cnt in briefing["detected_issues"]]) if briefing["detected_issues"] else "특정 유형 미확인"
-            facts_html = "".join([
-                f"<div style='color:#cbd5e1; margin:6px 0; padding-left:10px; border-left:3px solid #3b82f6;'>{i}. {fact}</div>"
-                for i, fact in enumerate(briefing["recent_facts"], 1)
-            ])
-            st.markdown(f"""
-<div style='color:#f1f5f9; line-height:1.85; background:#1e293b; padding:14px 18px; border-radius:10px; border:1px solid #334155; margin-top:6px;'>
-<b style='color:#fbbf24;'>탐지된 이슈 유형:</b> {issue_labels}<br>
-<b style='color:#fbbf24;'>수집 기사 수:</b> {briefing['article_count']}건 (최근 순 분석)<br><br>
-<b style='color:#ffffff;'>현재 상황 요약</b>
-{facts_html}
-<br><b style='color:#ffffff;'>예상 영향</b><br>
-<div style='color:#cbd5e1;'>
-현재 감지된 이슈가 지속될 경우, <b style='color:#f87171;'>{selected_route_key}</b> 구간의 통항 지연, 운임 상승(전쟁보험료 할증 포함),
-안전 우려로 인한 항로 이탈이 발생할 수 있습니다. {ship_nationality} 국적 선박은 위 대체 루트 목록의 통행 가능 여부를 반드시 확인 후
-항로 결정을 내리시기 바랍니다.
-</div>
-</div>
-""", unsafe_allow_html=True)
-        else:
-            st.caption("종합 브리핑을 생성할 뉴스 데이터가 부족합니다.")
     else:
         st.success("🟢 정상 운항 상태입니다.")
 
+    briefing = summarize_news_situation(news_items, selected_route_key) if news_items else None
+    if briefing:
+        st.markdown(f"""
+<div class="info-card" style='color:#334155; line-height:1.9; margin-top:14px;'>
+<b style='color:#0f172a; font-size:1.05rem;'>📋 뉴스 종합 요약</b><br>
+최근 수집된 <b style='color:#d97706;'>{briefing['article_count']}건</b>의 관련 기사
+(출처 <b style='color:#d97706;'>{briefing['source_count']}곳</b>)를 종합한 결과,
+현재 이 항로에서는 <b style='color:#d97706;'>{briefing['issue_text']}</b> 관련 이슈가 주로 보도되고 있습니다.<br>
+대표 헤드라인: <i>"{briefing['headline']}"</i>
+</div>
+""", unsafe_allow_html=True)
+
 with col_news:
     st.subheader("관련 뉴스")
-    news_items = fetch_news(curr_data["news_keyword"])
     if news_items is None:
         st.caption("NewsAPI 키 미설정")
     elif not news_items:
         st.caption("관련 뉴스를 가져오지 못했습니다.")
     else:
         for n in news_items:
-            st.markdown(f"**[{n['title']}]({n['link']})**")
-            st.caption(f"📰 {n['source']} · " + (n["desc"] or "")[:80] + "...")
+            st.markdown(f"""
+<div class="news-card">
+<a href="{n['link']}" target="_blank" style="color:#0f172a; font-weight:700; font-size:0.95rem;">{n['title']}</a>
+<div style="color:#64748b; font-size:0.82rem; margin-top:4px;">📰 {n['source']} · {(n['desc'] or '')[:80]}...</div>
+</div>
+""", unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # 리스크 점수 추이 (30일)
@@ -906,16 +939,16 @@ trend_values = np.clip(trend_base + np.cumsum(np.random.randn(30) * 4), 0, 100)
 fig_trend = go.Figure()
 fig_trend.add_trace(go.Scatter(
     y=trend_values, mode="lines",
-    line=dict(color="#f59e0b", width=2),
-    fill="tozeroy", fillcolor="rgba(245, 158, 11, 0.15)",
+    line=dict(color="#2563eb", width=2.5),
+    fill="tozeroy", fillcolor="rgba(37, 99, 235, 0.10)",
     name="리스크 점수"
 ))
 fig_trend.update_layout(
     paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color="#94a3b8"),
+    font=dict(color="#64748b"),
     height=220, margin=dict(l=10, r=10, t=10, b=10),
     xaxis=dict(showgrid=False, title="일 전"),
-    yaxis=dict(showgrid=True, gridcolor="#1e293b", title="점수"),
+    yaxis=dict(showgrid=True, gridcolor="#e2e8f0", title="점수"),
     showlegend=False
 )
 st.plotly_chart(fig_trend, use_container_width=True)
@@ -938,10 +971,10 @@ if ALERT_TRIGGERED:
             c5.metric(f"통행({ship_nationality})", r["passage_status"])
             st.info(r["recommendation_reason"])
 
-            risk_tag, badge_color = ("🟢 Low", "#14532d") if r["total_score"] >= 70 else \
-                (("🟡 Medium", "#78350f") if r["total_score"] >= 40 else ("🔴 High", "#7f1d1d"))
+            risk_tag, badge_bg, badge_text = ("🟢 Low", "#dcfce7", "#15803d") if r["total_score"] >= 70 else \
+                (("🟡 Medium", "#fef3c7", "#b45309") if r["total_score"] >= 40 else ("🔴 High", "#fee2e2", "#b91c1c"))
             st.markdown(
-                f"<span class='risk-badge' style='background:{badge_color};color:white;'>{risk_tag} Risk</span>",
+                f"<span class='risk-badge' style='background:{badge_bg};color:{badge_text};'>{risk_tag} Risk</span>",
                 unsafe_allow_html=True
             )
 

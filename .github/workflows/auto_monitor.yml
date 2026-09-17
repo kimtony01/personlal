@@ -1,0 +1,46 @@
+name: 해상 항로 자동 수집 및 리스크 경보
+
+on:
+  schedule:
+    # UTC 기준 30분마다 실행 (한국시간 기준도 동일 주기, 시:분만 다름)
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}   # Actions 탭에서 수동 실행 버튼도 사용 가능
+
+permissions:
+  contents: write
+
+jobs:
+  collect-and-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 실시간 AIS 선박 데이터 수집 (collector.py)
+        env:
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+        run: python collector.py
+
+      - name: 리스크 점검 및 이메일 경보 (risk_check_and_alert.py)
+        env:
+          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
+        run: python risk_check_and_alert.py
+
+      - name: 수집 결과 자동 커밋 & 푸시
+        run: |
+          git config user.name "auto-monitor-bot"
+          git config user.email "actions@github.com"
+          git add ship_data.json ship_history.json
+          git diff --quiet --cached || git commit -m "자동 수집: 선박 위치 업데이트 ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+          git push
