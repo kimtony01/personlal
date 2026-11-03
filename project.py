@@ -121,6 +121,21 @@ st.markdown("""
     .tile { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; min-height: 104px; }
     .tile .big { color: #0f172a; font-weight: 800; font-size: 1.35rem; margin: 2px 0; }
     .tile .muted { color: #64748b; font-size: 0.78rem; }
+    .sum-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px 20px; margin-bottom: 16px;
+        box-shadow: 0 1px 3px rgba(15,23,42,0.05); }
+    .sum-card h4 { margin: 0 0 10px; color: #0f172a; font-size: 1rem; }
+    .sum-line { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; font-size: 0.88rem; color: #334155; }
+    .sum-line b { color: #0f172a; white-space: nowrap; }
+    .sum-line .why { color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sum-act { background: #fff7ed; border-radius: 10px; padding: 8px 12px; margin-top: 8px; font-size: 0.86rem; color: #9a3412; }
+    .alt-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 16px; height: 100%; }
+    .alt-card.cur { border-color: #fecaca; background: #fffafa; }
+    .alt-card.best { border: 2px solid #fb923c; }
+    .alt-card h5 { margin: 0 0 6px; color: #0f172a; font-size: 0.95rem; }
+    .alt-card .big { color: #0f172a; font-weight: 800; font-size: 1.4rem; }
+    .alt-card .muted { color: #64748b; font-size: 0.8rem; line-height: 1.5; }
+    .pipe { background: #f8fafc; border-left: 3px solid #fb923c; border-radius: 6px; padding: 8px 10px; margin-top: 8px;
+        font-size: 0.8rem; color: #475569; }
     .news-item { padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
     .news-item:last-child { border-bottom: none; }
     .news-item a { color: #0f172a !important; font-size: 0.93rem; }
@@ -315,6 +330,55 @@ st.markdown(f"""
   <div>{pill(overall, '전체 ' + LEVELS[overall]['label']) if overall is not None else pill(None)}</div>
 </div>""", unsafe_allow_html=True)
 
+# -------------------------------------------------------------
+# 📋 총요약 — 해협 현황 · 추적 중인 모든 배 · 권장 조치
+# -------------------------------------------------------------
+def voyage_summary(v):
+    """(가장 위험한 앞 해협 등급, 한 줄 상태, 권장 조치 또는 None)"""
+    try:
+        x = ev if voyage and v["id"] == voyage["id"] else voyages.evaluate(
+            v, levels, CONFIG["ais"]["position_max_age_hours"], CONFIG["voyage"]["max_detour_ratio"])
+    except Exception:
+        return None, "계산 실패", None
+    if x.get("error") or x.get("arrived"):
+        return 0, "도착(또는 계산 불가)", None
+    bad = [s for s in x["straits"] if (s["level"] or 0) >= 1]
+    if not bad:
+        return 0, "앞으로 지날 위험 해협 없음", None
+    worst = max(bad, key=lambda s: s["level"])
+    state = " · ".join(f"{s['name']} {LEVELS[s['level']]['icon']}" for s in bad) + " 지날 예정"
+    if x["alternatives"]:
+        a = x["alternatives"][0]
+        return worst["level"], state, f"{a['label']} ({a['delta_days']:+.1f}일)"
+    return worst["level"], state, "대체 항로 없음 — 운항 일정 재검토"
+
+
+counts = {lv: sum(1 for e_ in evals.values() if e_["level"] == lv) for lv in (2, 1, 0)}
+strait_lines = "".join(
+    f"<div class='sum-line'>{LEVELS[evals[x]['level']]['icon']} <b>{STRAITS[x]['name']}</b>"
+    f"<span class='why' title='{rules.headline(evals[x])}'>{rules.headline(evals[x])}</span></div>"
+    for x in sorted(STRAITS, key=lambda k: -(evals[k]["level"] or 0)) if (evals[x]["level"] or 0) >= 1
+) or "<div class='sum-line'>🟢 모든 감시 해협이 정상입니다</div>"
+ship_rows, actions = [], []
+for v in choices:
+    lv, state, act = voyage_summary(v)
+    tag = " <span class='pill' style='background:#ede9fe;color:#6d28d9'>예시</span>" if v.get("demo") else ""
+    ship_rows.append(f"<div class='sum-line'>{LEVELS[lv]['icon']} <b>{v['ship_name']}</b>{tag} {state}</div>")
+    if act:
+        actions.append(f"<b>{v['ship_name']}</b> → {act}")
+pw_dates = [st_["data"]["raw"]["traffic"]["latest_date"] for st_ in statuses.values()
+            if st_ and st_["data"]["raw"].get("traffic")]
+s1, s2 = st.columns([1, 1])
+s1.markdown(f"""<div class="sum-card"><h4>📋 총요약 · 해협</h4>
+  <div class='sum-line'>{pill(2, f"심각 {counts[2]}")} {pill(1, f"주의 {counts[1]}")} {pill(0, f"정상 {counts[0]}")}</div>
+  {strait_lines}
+  <div class='muted' style='margin-top:6px;font-size:0.76rem'>마지막 확인 {last_run[5:16] if last_run else '-'} ·
+  통항 데이터 {max(pw_dates) if pw_dates else '-'}까지 · 30분마다 자동 갱신</div></div>""", unsafe_allow_html=True)
+s2.markdown(f"""<div class="sum-card"><h4>🚢 총요약 · 추적 중인 배 {len(choices)}척</h4>
+  {''.join(ship_rows) or "<div class='sum-line'>추적 중인 배가 없습니다 — 사이드바에서 등록</div>"}
+  {('<div class="sum-act">권장 조치<br>' + '<br>'.join(actions) + '</div>') if actions else ''}</div>""",
+            unsafe_allow_html=True)
+
 if not db.USE_PG:
     st.warning("DB(DATABASE_URL)가 설정되지 않아 임시 저장소를 쓰고 있습니다. 앱이 재시작되면 등록한 선박이 사라집니다.")
 
@@ -388,7 +452,7 @@ def unwrap_lons(lons):
     return out
 
 
-def view_bounds(lines, pad=0.12, aspect=2.0):
+def view_bounds(lines, pad=0.12, aspect=2.4):
     """보여 줄 범위: (중심 경도, 경도 범위, 위도 범위). lines = 선마다 [(lat, lon), ...]
 
     날짜변경선을 넘는 항로도 한 덩어리로 이어 계산. 지구 반 바퀴를 넘으면 세계 지도(범위 None)
@@ -446,7 +510,8 @@ def base_layout(fig, height=470, lines=None):
                  showcoastlines=True, coastlinecolor="#64748b", coastlinewidth=0.7,
                  showframe=False, bgcolor="rgba(0,0,0,0)", **view),
         paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0), height=height,
-        legend=dict(orientation="h", yanchor="top", y=-0.02, x=0, font=dict(color="#475569", size=12)))
+        legend=dict(orientation="v", yanchor="top", y=0.99, x=0.01, font=dict(color="#334155", size=11),
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="#e2e8f0", borderwidth=1))
     return fig
 
 
@@ -468,8 +533,17 @@ with map_col:
             for i, a in enumerate(ev["alternatives"][:2]):
                 fig.add_trace(go.Scattergeo(lat=[p[0] for p in a["points"]], lon=[p[1] for p in a["points"]],
                                             mode="lines", line=dict(width=3, color=ALT_COLORS[i], dash="dash"),
-                                            name=f"대체 {i + 1}: {a['label']} ({a['delta_days']:+.1f}일)",
+                                            name=f"대체 {i + 1}: {a['label'].replace('항구 변경: ', '')} ({a['delta_days']:+.1f}일)",
                                             hoverinfo="name"))
+                if a.get("land_points"):
+                    lp = a["land_points"]
+                    fig.add_trace(go.Scattergeo(
+                        lat=[x[0] for x in lp], lon=[x[1] for x in lp], mode="lines+markers",
+                        line=dict(width=6, color=ALT_COLORS[i], dash="dot"),
+                        marker=dict(size=[11] + [0] * (len(lp) - 2) + [11], symbol="square", color=ALT_COLORS[i],
+                                    line=dict(width=1.5, color="white")),
+                        name="  └ 육상 원유 파이프라인",
+                        hovertext=f"{a['pipeline']} · {a['capacity']}", hoverinfo="text"))
         pts = ev["route_points"]
         fig.add_trace(go.Scattergeo(lat=[p[0] for p in pts], lon=[p[1] for p in pts], mode="lines",
                                     line=dict(width=5, color=BLUE), name="남은 항로", hoverinfo="name"))
@@ -490,6 +564,8 @@ with map_col:
             lines.append([(t["lat"], t["lon"]) for t in track])
         for a in (ev["alternatives"][:2] if risky_ahead else []):
             lines.append([tuple(p[:2]) for p in a["points"]])
+            if a.get("land_points"):
+                lines.append([tuple(x) for x in a["land_points"]])
         hull_lat, hull_lon = ship_shape(here[0], here[1], ev["heading"], lines)
         # 실제 위치 = 진한 배, 위치를 아직 못 받음(출발항 기준) = 흰 배에 진한 테두리
         fig.add_trace(go.Scattergeo(lat=hull_lat, lon=hull_lon, mode="lines", fill="toself",
@@ -536,10 +612,10 @@ with info_col:
         risky = [s for s in ev["straits"] if (s["level"] or 0) >= 1]
         if risky and ev["alternatives"]:
             best = ev["alternatives"][0]
-            st.markdown(f"""<div class="card rec"><span class="muted">🧭 대체 항로 추천</span>
+            pipe = f"<br>🛢 {best['pipeline']} · {best['capacity']}" if best.get("pipeline") else ""
+            st.markdown(f"""<div class="card rec"><span class="muted">🧭 추천 대체안</span>
   <div class="big">{best['label']}</div><div class="muted">{best['delta_days']:+.1f}일 · {risky[0]['name']}
-  {LEVELS[risky[0]['level']]['label']} 회피{('<br>' + best['note']) if best.get('note') else ''}</div></div>""",
-                        unsafe_allow_html=True)
+  {LEVELS[risky[0]['level']]['label']} 회피{pipe}</div></div>""", unsafe_allow_html=True)
         elif risky:
             st.warning("위험 해협을 피하는 대체 항로를 찾지 못했습니다.")
         else:
@@ -561,14 +637,6 @@ with info_col:
 <div class="row"><span>경보 메일</span><b>{voyage['recipients'] or '없음'}</b></div>""", unsafe_allow_html=True)
             for s in risky:
                 st.caption(f"{LEVELS[s['level']]['icon']} {s['name']}: {s['reason']}")
-            if ev["alternatives"]:
-                rows = [{"항로": "현재 항로", "일수": ev["days"], "차이": "기준",
-                         "해협": " ".join(f"{LEVELS[s['level']]['icon']}{s['name']}" for s in ev["straits"]) or "없음"}]
-                rows += [{"항로": a["label"], "일수": a["days"], "차이": f"{a['delta_days']:+.1f}일",
-                          "해협": " ".join(f"{LEVELS[s['level']]['icon']}{s['name']}" for s in a["straits"]) or "없음"}
-                         for a in ev["alternatives"]]
-                st.dataframe(rows, hide_index=True, width="stretch")
-                st.caption("거리·일수는 항로망 기준 근사값 (운하 통항료·보험료 미포함)")
     else:
         st.markdown("""<div class="card"><h4>🚢 내 선박 추적</h4>
   <div class="muted">사이드바 <b>➕ 선박 등록</b>에서 MMSI와 출발·도착항을 넣으면 위치·남은 항로·대체 항로가
@@ -581,6 +649,32 @@ with info_col:
   <div class="big">{voyages._alt_label(alt)}</div>
   <div class="muted">{alt['distance_nm'] - base_r['distance_nm']:+,}해리 · {cur['name']} 회피</div></div>""",
                             unsafe_allow_html=True)
+
+# -------------------------------------------------------------
+# 🧭 대체안 비교 (앞으로 지날 해협이 위험할 때만)
+# -------------------------------------------------------------
+if ok_ev and ev["alternatives"] and any((s["level"] or 0) >= 1 for s in ev["straits"]):
+    st.markdown(f"#### 🧭 대체안 비교 · {voyage['ship_name']}")
+
+    def strait_pills(lst):
+        return " ".join(pill(x["level"], x["name"]) for x in lst) or "<span class='muted'>감시 해협 없음</span>"
+
+    alts = ev["alternatives"][:3]
+    cols = st.columns(1 + len(alts))
+    cols[0].markdown(f"""<div class="alt-card cur"><h5>현재 항로 유지</h5>
+  <div class="big">기준</div><div class="muted">약 {ev['distance_nm']:,}해리 · {ev['days']}일 · {ev['eta'][5:]} 도착</div>
+  <div style="margin-top:8px">{strait_pills(ev['straits'])}</div></div>""", unsafe_allow_html=True)
+    for i, (col, a) in enumerate(zip(cols[1:], alts)):
+        color = "#16a34a" if a["delta_days"] <= 0 else "#b45309"
+        pipe = (f"<div class='pipe'>🛢 <b>{a['pipeline']}</b> · {a['capacity']}<br>{a['note']}"
+                f" · <a href='{a['source']}' target='_blank'>출처(EIA)</a></div>") if a.get("pipeline") else ""
+        cols[i + 1].markdown(f"""<div class="alt-card {'best' if i == 0 else ''}">
+  <h5>{'⭐ ' if i == 0 else ''}{a['label']}</h5>
+  <div class="big" style="color:{color}">{a['delta_days']:+.1f}일</div>
+  <div class="muted">약 {a['distance_nm']:,}해리 · {a['days']}일</div>
+  <div style="margin-top:8px">{strait_pills(a['straits'])}</div>{pipe}</div>""", unsafe_allow_html=True)
+    st.caption("거리·일수는 항로망 기준 근사값이며 운하 통항료·보험료·파이프라인 이용료는 포함하지 않습니다. "
+               "위험이 낮은 순 → 빠른 순으로 정렬. ⭐ = 추천")
 
 # -------------------------------------------------------------
 # ③ 관련 뉴스 — 선박을 추적 중이면 그 배가 앞으로 지날 해협의 뉴스만, 아니면 위에서 고른 해협
