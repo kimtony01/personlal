@@ -29,7 +29,7 @@ def _quantile(values, q):
     return v[lo] + (v[hi] - v[lo]) * (i - lo)
 
 
-def news_eval(windows, ratio, avg_days, baseline_days, min_days, min_events=3):
+def news_eval(windows, ratio, avg_days, baseline_days, min_days, min_events=20):
     """windows: 24시간 단위 사건 수 목록 (최근 24시간이 앞, 빠진 구간은 None)
 
     최근 avg_days 일 하루 평균 ÷ 평소(그 전 baseline_days 일 중앙값). 최근 기간을 기준에서 빼서
@@ -44,6 +44,7 @@ def news_eval(windows, ratio, avg_days, baseline_days, min_days, min_events=3):
         return {"available": False, "note": f"평소 기준 수집 중 ({len(baseline)}/{min_days}일)",
                 "events": windows[0], "avg": round(avg, 1)}
     median = _quantile(baseline, 0.5)
+    # 평소 사건이 거의 없는 곳(북극 등)은 몇 건만 늘어도 배수가 커지므로 하루 min_events 건 이상일 때만 판단
     threshold = max(median * ratio, min_events)
     return {"available": True, "events": windows[0], "avg": round(avg, 1), "median": round(median, 1),
             "threshold": round(threshold, 1), "ratio": round(avg / median, 1) if median else None,
@@ -88,12 +89,13 @@ def evaluate(raw, th, enabled=None):
     # ② 뉴스 사건
     if enabled.get("news"):
         n = news_eval(raw.get("news_windows"), th["news_ratio"], th["news_avg_days"], th["news_baseline_days"],
-                      th["news_min_baseline_days"])
+                      th["news_min_baseline_days"], th["news_min_events"])
         layers["news"] = n
         if n["available"] and n["flag"]:
             reasons.append({"level": 1, "layer": "news", "url": None,
                             "text": f"갈등 뉴스 사건이 최근 {n['avg_days']}일 평균 하루 {n['avg']:g}건으로 "
-                                    f"평소({n['median']:g}건)의 {n['ratio']}배"})
+                                    + (f"평소({n['median']:g}건)의 {n['ratio']}배" if n["ratio"]
+                                       else "평소(거의 없음)보다 크게 늘어남")})
 
     # ③ 실제 통항량
     if enabled.get("traffic"):

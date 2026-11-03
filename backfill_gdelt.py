@@ -48,7 +48,7 @@ def main(days):
                 done += 1
             if done and done % 200 == 0:
                 log.info("%d / %d", done, len(stamps))
-    if not have:
+    if not have and db.load_blob("gdelt_last")[0] is None:   # 그사이 정기 실행이 진행 상태를 저장했으면 덮어쓰지 않음
         db.save_blob("gdelt_last", signals._ts(end))
     log.info("완료: %d개 파일", done)
 

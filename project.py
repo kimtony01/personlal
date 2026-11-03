@@ -508,8 +508,8 @@ else:
       <div class='row'><span>최근 {nw['avg_days']}일 하루 평균</span><b>{nw['avg']:g}건</b></div>
       <div class='row'><span>평소 (그 전 {nw['baseline_days']}일 중앙값)</span><b>{nw['median']:g}건</b></div>
       <div class='row'><span>최근 24시간</span><b>{nw['events']:g}건</b></div>
-      <div class='muted'>GDELT: 해협 {cur['radius_km']}km 안의 위협·공격·봉쇄 사건.
-      2023 홍해 사태 소급 검증에서 나포 32일 전 첫 경고</div>""")
+      <div class='muted'>GDELT: 해협 {cur['radius_km']}km 안, 위치가 확인된 위협·공격·봉쇄 사건.
+      2023 홍해 사태 소급 검증에서 나포 26일 전 첫 경고</div>""")
 
 tr = L.get("traffic")
 if tr is None:

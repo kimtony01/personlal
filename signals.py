@@ -38,7 +38,8 @@ def km_between(lat1, lon1, lat2, lon2):
 # -------------------------------------------------------------
 # 뉴스 사건 (GDELT 2.0 Events, 15분 단위 공개 파일)
 # 기사에서 자동 추출한 사건 중 '갈등'(QuadClass 3 = 말로 하는 갈등: 위협·경고·비난,
-# 4 = 물리적 갈등: 공격·나포·봉쇄)이 해협 반경 안에서 일어난 것만 셈
+# 4 = 물리적 갈등: 공격·나포·봉쇄)이 해협 반경 안에서 일어난 것만 셈.
+# 기사에 나라 이름만 있어 나라 중심점에 찍힌 사건(ActionGeo_Type 1)은 실제 위치를 알 수 없어 뺌
 # -------------------------------------------------------------
 def gdelt_file_counts(ts):
     """15분 파일 하나 → {strait_id: [events, material, goldstein]}. 파일이 없으면 None"""
@@ -50,7 +51,7 @@ def gdelt_file_counts(ts):
     counts = {sid: [0, 0, 0.0] for sid in STRAITS}
     with zf.open(zf.namelist()[0]) as f:
         for row in csv.reader(io.TextIOWrapper(f, encoding="utf-8", errors="replace"), delimiter="\t"):
-            if len(row) < 58 or row[29] not in ("3", "4") or not row[56] or not row[57]:
+            if len(row) < 58 or row[29] not in ("3", "4") or row[51] == "1" or not row[56] or not row[57]:
                 continue
             try:
                 lat, lon, gs = float(row[56]), float(row[57]), float(row[30] or 0)
