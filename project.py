@@ -5,7 +5,7 @@
 """
 import os
 import tomllib
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -89,7 +89,20 @@ st.markdown("""
     .row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid #f1f5f9;
         font-size: 0.86rem; color: #334155; }
     .row:last-child { border-bottom: none; }
-    .news-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0; }
+    .stats div { background: #f8fafc; border-radius: 10px; padding: 8px 10px; }
+    .stats span { display: block; color: #64748b; font-size: 0.72rem; }
+    .stats b { color: #0f172a; font-size: 0.95rem; }
+    .card .pill { margin: 2px 4px 2px 0; }
+    .card.rec { border-color: #fdba74; background: #fffbf5; }
+    .card.ok { border-color: #bbf7d0; background: #f7fef9; }
+    .tile { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; min-height: 104px; }
+    .tile .big { color: #0f172a; font-weight: 800; font-size: 1.35rem; margin: 2px 0; }
+    .tile .muted { color: #64748b; font-size: 0.78rem; }
+    .news-item { padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+    .news-item:last-child { border-bottom: none; }
+    .news-item a { color: #0f172a !important; font-size: 0.93rem; }
+    .news-item .muted { color: #64748b; font-size: 0.78rem; margin-top: 2px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,13 +133,14 @@ def load_traffic(portname):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_news(query, display=6):
+def fetch_news(query, display=8):
     api_key = os.getenv("NEWSAPI_KEY")
     if not api_key:
         return None
     try:
         res = requests.get("https://newsapi.org/v2/everything", timeout=8, params={
-            "q": query, "language": "en", "sortBy": "publishedAt", "pageSize": display, "apiKey": api_key})
+            "q": query, "searchIn": "title,description", "language": "en", "sortBy": "publishedAt",
+            "pageSize": display, "apiKey": api_key})
         res.raise_for_status()
         translator, results = Translator() if Translator else None, []
         for a in res.json().get("articles", []):
@@ -283,7 +297,7 @@ for col, (sid, s) in zip(cols, STRAITS.items()):
 <div class="sig-card {'sel' if sid == st.session_state['strait'] else ''}">
   <div class="sig-name">{s['name']}</div><div class="sig-region">{s['region']}</div>
   {pill(e['level'])}
-  <div class="sig-why">{why if len(why) < 70 else why[:68] + '…'}</div>
+  <div class="sig-why">{why if len(why) < 46 else why[:44] + '…'}</div>
 </div>""", unsafe_allow_html=True)
     if col.button("자세히", key=f"pick_{sid}", width="stretch"):
         st.session_state["strait"] = sid
@@ -313,8 +327,9 @@ def arrows(fig, pts, color, n=4):
     lat, lon, ang = [], [], []
     for i in idx:
         (a1, o1), (a2, o2) = pts[i], pts[i + 1]
-        lat.append((a1 + a2) / 2)
-        lon.append((o1 + o2) / 2)
+        mid = voyages._interp((a1, o1), (a2, o2), 0.5)
+        lat.append(mid[0])
+        lon.append(mid[1])
         ang.append(voyages.bearing(a1, o1, a2, o2))
     fig.add_trace(go.Scattergeo(lat=lat, lon=lon, mode="markers", hoverinfo="skip", showlegend=False,
                                 marker=dict(symbol="triangle-up", size=11, color=color, angle=ang, angleref="up",
@@ -399,200 +414,218 @@ with info_col:
         st.success(f"✓ {voyage['ship_name']}이(가) 도착항 근처에 있습니다. 사이드바에서 '운항 종료'를 누르세요.")
     elif ok_ev:
         pos = ev.get("position")
-        if ev["source"] == "ais":
-            where = f"AIS 수신 {pos['age_h']:g}시간 전"
-        elif ev["source"] == "estimated":
-            where = f"마지막 수신 {pos['age_h']:g}시간 전 → 속력으로 추정"
-        else:
-            where = ("AIS 위치가 오래돼 출발항 기준" if pos else "AIS 기록 없음 — 출발항 기준")
-        straits_html = "".join(f"<div class='row'><span>{s['name']}</span>{pill(s['level'])}</div>"
-                               for s in ev["straits"]) or "<div class='muted'>앞으로 지날 감시 해협 없음</div>"
+        where = {"ais": "실시간", "estimated": "추정 위치", "origin": "출발항 기준"}[ev["source"]]
+        ahead = " ".join(f"{pill(s['level'], s['name'])}" for s in ev["straits"]) or \
+            "<span class='muted'>감시 해협 없음</span>"
         st.markdown(f"""
 <div class="card"><h4>🚢 {voyage['ship_name']}</h4>
   <div class="muted">{voyage['origin']} → {voyage['dest']}</div>
-  <div class="row"><span>남은 거리</span><b>약 {ev['distance_nm']:,}해리</b></div>
-  <div class="row"><span>도착 예상</span><b>{ev['eta']} (약 {ev['days']}일)</b></div>
-  <div class="row"><span>위치 기준</span><b>{where}</b></div>
-  <div class="row"><span>진행 방향</span><b>{ev['heading']}°</b></div>
-</div>
-<div class="card"><h4>앞으로 지날 해협</h4>{straits_html}</div>""", unsafe_allow_html=True)
+  <div class="stats">
+    <div><span>남은 거리</span><b>{ev['distance_nm']:,}해리</b></div>
+    <div><span>도착 예상</span><b>{ev['eta'][5:]}</b></div>
+    <div><span>위치</span><b>{where}</b></div>
+  </div>
+  <div class="muted" style="margin-bottom:4px">앞으로 지날 해협</div>{ahead}
+</div>""", unsafe_allow_html=True)
         risky = [s for s in ev["straits"] if (s["level"] or 0) >= 1]
         if risky and ev["alternatives"]:
             best = ev["alternatives"][0]
-            st.markdown(f"""
-<div class="card" style="border-color:#fdba74;"><h4>🧭 대체 항로 추천</h4>
-  <div class="big">{best['label']}</div>
-  <div class="muted">약 {best['distance_nm']:,}해리 · {best['days']}일 (<b>{best['delta_days']:+.1f}일</b>)<br>
-  지나는 해협: {", ".join(f"{s['name']} {LEVELS[s['level']]['label']}" for s in best['straits']) or '감시 해협 없음'}<br>
-  이유: {risky[0]['name']} {LEVELS[risky[0]['level']]['label']} — {risky[0]['reason']}</div>
-</div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="card rec"><span class="muted">🧭 대체 항로 추천</span>
+  <div class="big">{best['label']}</div><div class="muted">{best['delta_days']:+.1f}일 · {risky[0]['name']}
+  {LEVELS[risky[0]['level']]['label']} 회피</div></div>""", unsafe_allow_html=True)
         elif risky:
-            st.warning("위험 해협을 피하는 대체 항로를 항로망에서 찾지 못했습니다.")
+            st.warning("위험 해협을 피하는 대체 항로를 찾지 못했습니다.")
         else:
-            st.markdown("<div class='card'><h4>✓ 현재 항로 유지</h4><div class='muted'>앞으로 지날 해협이 모두 "
-                        "정상입니다.</div></div>", unsafe_allow_html=True)
+            st.markdown("<div class='card ok'><b>✓ 현재 항로 유지</b> <span class='muted'>· 앞으로 지날 해협 모두 정상"
+                        "</span></div>", unsafe_allow_html=True)
+        with st.expander("자세히 보기"):
+            if ev["source"] == "ais":
+                loc = f"AIS 수신 {pos['age_h']:g}시간 전 ({pos['seen_at'][5:16]})"
+            elif ev["source"] == "estimated":
+                loc = f"마지막 수신 {pos['age_h']:g}시간 전 위치에서 속력으로 추정"
+            else:
+                loc = ("AIS 위치가 오래돼 출발항 기준으로 계산" if pos else
+                       "아직 무료 AIS에 신호가 잡히지 않아 출발항 기준으로 계산 (잡히면 자동으로 실제 위치로 바뀜)")
+            st.markdown(f"""<div class="row"><span>위치</span><b>{loc}</b></div>
+<div class="row"><span>남은 거리 · 일수</span><b>약 {ev['distance_nm']:,}해리 · {ev['days']}일 ({ev['eta']} 도착)</b></div>
+<div class="row"><span>진행 방향</span><b>{ev['heading']}°</b></div>
+<div class="row"><span>평균 속력</span><b>{voyage['speed_kn']}노트</b></div>
+<div class="row"><span>MMSI</span><b>{voyage['mmsi'] or '없음'}</b></div>
+<div class="row"><span>경보 메일</span><b>{voyage['recipients'] or '없음'}</b></div>""", unsafe_allow_html=True)
+            for s in risky:
+                st.caption(f"{LEVELS[s['level']]['icon']} {s['name']}: {s['reason']}")
+            if ev["alternatives"]:
+                rows = [{"항로": "현재 항로", "일수": ev["days"], "차이": "기준",
+                         "해협": " ".join(f"{LEVELS[s['level']]['icon']}{s['name']}" for s in ev["straits"]) or "없음"}]
+                rows += [{"항로": a["label"], "일수": a["days"], "차이": f"{a['delta_days']:+.1f}일",
+                          "해협": " ".join(f"{LEVELS[s['level']]['icon']}{s['name']}" for s in a["straits"]) or "없음"}
+                         for a in ev["alternatives"]]
+                st.dataframe(rows, hide_index=True, width="stretch")
+                st.caption("거리·일수는 항로망 기준 근사값 (운하 통항료·보험료 미포함)")
     else:
-        st.markdown("""
-<div class="card"><h4>🚢 선박을 등록해 보세요</h4>
-  <div class="muted">사이드바에서 선박명 또는 MMSI와 출발·도착항을 넣으면<br>
-  · 현재 위치와 진행 방향, 남은 항로<br>· 앞으로 지날 해협의 신호등<br>· 위험할 때 대체 항로와 경보 메일<br>
-  을 자동으로 보여 드립니다.</div></div>""", unsafe_allow_html=True)
+        st.markdown("""<div class="card"><h4>🚢 내 선박 추적</h4>
+  <div class="muted">사이드바 <b>➕ 선박 등록</b>에서 MMSI와 출발·도착항을 넣으면 위치·남은 항로·대체 항로가
+  여기에 나옵니다.</div></div>""", unsafe_allow_html=True)
         sample = SAMPLE_ROUTES.get(sid)
         if sample and (e["level"] or 0) >= 1:
-            alt = find_route(*sample, banned_straits=[sid])
-            base_r = find_route(*sample)
+            alt, base_r = find_route(*sample, banned_straits=[sid]), find_route(*sample)
             if alt:
-                st.markdown(f"""
-<div class="card" style="border-color:#fdba74;"><h4>🧭 대표 항로 기준 대체 항로</h4>
-  <div class="muted">{sample[0]} → {sample[1]} ({route_label(base_r['straits'])})</div>
+                st.markdown(f"""<div class="card rec"><span class="muted">🧭 예: {sample[0]} → {sample[1]}</span>
   <div class="big">{voyages._alt_label(alt)}</div>
-  <div class="muted">{alt['distance_nm']:,}해리 (현재 항로 {base_r['distance_nm']:,}해리,
-  {alt['distance_nm'] - base_r['distance_nm']:+,}해리)</div></div>""", unsafe_allow_html=True)
+  <div class="muted">{alt['distance_nm'] - base_r['distance_nm']:+,}해리 · {cur['name']} 회피</div></div>""",
+                            unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# ③ 관련 뉴스 (원래 기능 유지)
+# ③ 관련 뉴스 — 선박을 추적 중이면 그 배가 앞으로 지날 해협의 뉴스만, 아니면 위에서 고른 해협
 # -------------------------------------------------------------
-st.markdown(f"### 📰 관련 뉴스 · {cur['name']}")
-news = fetch_news(cur["news_keyword"])
-if news is None:
-    st.caption("NewsAPI 키가 설정되지 않았습니다.")
-elif isinstance(news, dict):
-    st.caption(f"뉴스를 가져오지 못했습니다: {news['error']}")
-elif not news:
-    st.caption("관련 뉴스가 없습니다.")
-else:
-    b = summarize_news(news)
-    st.markdown(f"""<div class="card"><div class="muted">최근 기사 <b>{b['count']}건</b> (출처 {b['sources']}곳) 종합:
-        주로 <b style='color:#d97706'>{b['issues']}</b> 관련 보도</div></div>""", unsafe_allow_html=True)
-    ncols = st.columns(2)
-    for i, n in enumerate(news):
-        ncols[i % 2].markdown(f"""
-<div class="news-card"><a href="{n['link']}" target="_blank" style="color:#0f172a;font-size:0.95rem;">{n['title']}</a>
-<div style="color:#64748b;font-size:0.8rem;margin-top:4px;">📰 {n['source']} · {n['date']} · {(n['desc'] or '')[:90]}…</div>
-</div>""", unsafe_allow_html=True)
+def news_item(n, desc=False):
+    d = f"<div class='muted'>{n['desc']}</div>" if desc and n.get("desc") else ""
+    return (f"<div class='news-item'><a href='{n['link']}' target='_blank'>{n['title']}</a>"
+            f"<div class='muted'>{n['source']} · {n['date']}</div>{d}</div>")
+
+
+def show_news(s_id, title):
+    st.markdown(f"#### 📰 {title}")
+    news = fetch_news(STRAITS[s_id]["news_keyword"])
+    if news is None:
+        st.caption("NewsAPI 키가 설정되지 않았습니다.")
+    elif isinstance(news, dict):
+        st.caption(f"뉴스를 가져오지 못했습니다: {news['error']}")
+    elif not news:
+        st.caption("최근 관련 뉴스가 없습니다.")
+    else:
+        b = summarize_news(news)
+        st.caption(f"최근 {b['count']}건 · 주로 {b['issues']} 관련 보도")
+        st.markdown("<div class='card'>" + "".join(news_item(n) for n in news[:3]) + "</div>",
+                    unsafe_allow_html=True)
+        if len(news) > 3:
+            with st.expander(f"뉴스 더 보기 ({len(news) - 3}건)"):
+                st.markdown("".join(news_item(n, desc=True) for n in news[3:]), unsafe_allow_html=True)
+
+
+if ok_ev:
+    if ev["straits"]:
+        for s in ev["straits"]:
+            show_news(s["id"], f"{voyage['ship_name']} 항로 뉴스 · {s['name']} {LEVELS[s['level']]['icon']}")
+    else:
+        st.caption(f"📰 {voyage['ship_name']}의 남은 항로에는 감시 해협이 없어 관련 뉴스를 표시하지 않습니다.")
+elif not voyage:
+    show_news(sid, f"관련 뉴스 · {cur['name']}")
 
 # -------------------------------------------------------------
-# ④ 판단 근거 · 기록 · 대체 항로 비교
+# ④ 판단 근거 (요약 → 자세히 보기)
 # -------------------------------------------------------------
-st.markdown(f"### 🔎 왜 이 색인가 · {cur['name']}")
+st.markdown(f"#### 🔎 판단 근거 · {cur['name']}")
 L = e.get("layers", {})
+contrib = {}
+for r in e["reasons"]:
+    contrib[r["layer"]] = max(contrib.get(r["layer"], 0), r["level"])
+
+
+def tile(col, key, title, value, sub):
+    lv = contrib.get(key, 0) if key in L else None
+    color = LEVELS[lv]["color"] if lv else "#e2e8f0"
+    col.markdown(f"""<div class="tile" style="border-left:4px solid {color}">
+  <div class="muted">{title}</div><div class="big">{value}</div><div class="muted">{sub}</div></div>""",
+                 unsafe_allow_html=True)
+
+
+off, nw, tr, ds = L.get("official"), L.get("news"), L.get("traffic"), L.get("disaster")
 c1, c2, c3, c4 = st.columns(4)
-
-
-def card(col, title, body):
-    col.markdown(f"<div class='card' style='min-height:190px'><h4>{title}</h4>{body}</div>", unsafe_allow_html=True)
-
-
-off = L.get("official")
 if off is None:
-    card(c1, "① 공식 판단", "<div class='muted'>꺼짐</div>")
+    tile(c1, "official", "① 공식 경보", "꺼짐", "")
 else:
-    def official_row(it):
-        stale = " · <b>갱신 필요</b>" if it["stale"] else ""
-        link = f" · <a href='{it['url']}' target='_blank'>출처</a>" if it.get("url") else ""
-        note = " · 판단에는 쓰지 않음(지정 유지)" if it.get("context") else ""
-        return (f"<div class='row'><span>{it['name']}</span><span>{it['value']}{stale}</span></div>"
-                f"<div class='muted'>{it['date'] or ''}{link}{note}</div>")
-    rows = "".join(official_row(it) for it in off["items"]) or "<div class='muted'>현재 등록된 공식 경보 없음</div>"
-    card(c1, "① 공식 판단", rows + "<div class='muted' style='margin-top:6px'>미국 MSCI · JMIC/UKMTO · Lloyd's JWC "
-                                   "(official_status.toml 에서 직접 관리)</div>")
-
-nw = L.get("news")
+    active_items = [it for it in off["items"] if it["level"] and not it["stale"]]
+    stale = sum(1 for it in off["items"] if it["stale"])
+    tile(c1, "official", "① 공식 경보", active_items[0]["value"] if active_items else "없음",
+         f"갱신 필요 {stale}건" if stale else ("전쟁위험 지정 해역" if off["items"] else "등록된 발표 없음"))
 if nw is None:
-    card(c2, "② 뉴스 사건", "<div class='muted'>꺼짐</div>")
+    tile(c2, "news", "② 뉴스 사건", "꺼짐", "")
 elif not nw["available"]:
-    card(c2, "② 뉴스 사건", f"<div class='muted'>{nw['note']}</div>")
+    tile(c2, "news", "② 뉴스 사건", "-", nw["note"])
 else:
-    card(c2, "② 뉴스 사건", f"""<div class='big'>평소의 {nw['ratio'] if nw['ratio'] is not None else '-'}배
-      <span class='muted'>(주의 기준 {th['news_ratio']:g}배)</span></div>
-      <div class='row'><span>최근 {nw['avg_days']}일 하루 평균</span><b>{nw['avg']:g}건</b></div>
-      <div class='row'><span>평소 (그 전 {nw['baseline_days']}일 중앙값)</span><b>{nw['median']:g}건</b></div>
-      <div class='row'><span>최근 24시간</span><b>{nw['events']:g}건</b></div>
-      <div class='muted'>GDELT: 해협 {cur['radius_km']}km 안, 위치가 확인된 위협·공격·봉쇄 사건.
-      2023 홍해 사태 소급 검증에서 나포 26일 전 첫 경고</div>""")
-
-tr = L.get("traffic")
+    tile(c2, "news", "② 뉴스 사건", f"{nw['ratio']}배" if nw["ratio"] else f"{nw['avg']:g}건",
+         f"평소 대비 · 주의 기준 {th['news_ratio']:g}배")
 if tr is None:
-    card(c3, "③ 실제 통항량", "<div class='muted'>꺼짐</div>")
-elif not tr.get("available") and "recent_avg" not in tr:
-    card(c3, "③ 실제 통항량", f"<div class='muted'>{tr.get('note', '데이터 없음')}</div>")
+    tile(c3, "traffic", "③ 실제 통항량", "꺼짐", "")
+elif "recent_avg" not in tr:
+    tile(c3, "traffic", "③ 실제 통항량", "-", tr.get("note", "데이터 없음"))
 else:
-    card(c3, "③ 실제 통항량", f"""<div class='big'>{tr['change_pct']:+.0f}% <span class='muted'>작년 같은 시기 대비</span></div>
-      <div class='row'><span>최근 7일 하루 평균</span><b>{tr['recent_avg']:g}척</b></div>
-      <div class='row'><span>작년 같은 7일</span><b>{tr['base_avg']:g}척</b></div>
-      <div class='muted'>{tr.get('note', '')} {tr['latest_date']}까지 (주 1회 갱신) ·
-      <a href='https://portwatch.imf.org' target='_blank'>IMF PortWatch</a></div>""")
-
-ds = L.get("disaster")
+    tile(c3, "traffic", "③ 실제 통항량", f"{tr['change_pct']:+.0f}%",
+         "작년 같은 시기 대비" if tr.get("available") else "통항이 적어 판단 제외")
 if ds is None:
-    card(c4, "④ 운항 불가 재해", "<div class='muted'>꺼짐</div>")
-elif not ds["available"]:
-    card(c4, "④ 운항 불가 재해", "<div class='muted'>재해 경보를 가져오지 못했습니다</div>")
+    tile(c4, "disaster", "④ 운항 불가 재해", "꺼짐", "")
 else:
-    body = "".join(f"<div class='row'><span>{h['name']}</span>{pill(2 if h['alert'] == 'Red' else 1, h['alert'])}</div>"
-                   f"<div class='muted'>해협에서 {h['km']}km</div>" for h in ds["hits"])
-    card(c4, "④ 운항 불가 재해", (body or "<div class='muted'>해협 근처 태풍·쓰나미 경보 없음</div>") +
-         "<div class='muted' style='margin-top:6px'>GDACS (EU·UN 재난경보) Orange·Red만 반영. "
-         "일반 파도·바람은 보지 않음</div>")
+    tile(c4, "disaster", "④ 운항 불가 재해", f"{len(ds['hits'])}건" if ds["hits"] else "없음",
+         "태풍·쓰나미 경보 (GDACS)" if ds["available"] else "경보를 가져오지 못함")
 
-g1, g2 = st.columns(2)
-with g1:
-    st.markdown("##### 뉴스 사건 수 (하루 단위, 최근 30일)")
-    raw = (statuses[sid] or {}).get("data", {}).get("raw", {})
-    w = list(reversed((raw.get("news_windows") or [])[:30]))
-    if any(x is not None for x in w):
-        f2 = go.Figure(go.Bar(x=[f"-{len(w) - 1 - i}일" for i in range(len(w))], y=w, marker_color="#93c5fd",
-                              name="갈등 사건 수"))
+with st.expander("자세히 보기 — 근거 상세 · 그래프 · 기록"):
+    d1, d2 = st.columns(2)
+    with d1:
+        st.markdown("**① 공식 경보** · 직접 관리하는 표 (official_status.toml)")
+        for it in (off or {}).get("items", []):
+            tag = " · 갱신 필요(판단 제외)" if it["stale"] else (" · 지정 유지(판단 제외)" if it.get("context") else "")
+            link = f" · [출처]({it['url']})" if it.get("url") else ""
+            st.markdown(f"- {it['name']}: **{it['value']}** ({it['date'] or '-'}){tag}{link}")
+        if not (off or {}).get("items"):
+            st.caption("등록된 발표 없음")
+        st.markdown("**④ 운항 불가 재해** · GDACS Orange·Red만, 일반 파도·바람은 보지 않음")
+        for h in (ds or {}).get("hits", []):
+            st.markdown(f"- {h['name']} **{h['alert']}** · 해협에서 {h['km']}km")
+        if not (ds or {}).get("hits"):
+            st.caption("해협 근처 경보 없음")
+    with d2:
         if nw and nw.get("available"):
-            f2.add_hline(y=nw["median"], line=dict(color="#94a3b8", dash="dot"),
-                         annotation_text=f"평소 {nw['median']:g}건", annotation_position="bottom left")
-            f2.add_hline(y=nw["threshold"], line=dict(color="#f59e0b", dash="dash"),
-                         annotation_text=f"주의 기준(7일 평균) {nw['threshold']:g}건", annotation_position="top left")
-        f2.update_layout(height=230, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
-                         plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="#e2e8f0"), showlegend=False)
-        st.plotly_chart(f2, width="stretch", config={"displaylogo": False})
-    else:
-        st.caption("수집된 기록이 아직 없습니다.")
-with g2:
-    st.markdown("##### 하루 통항 척수 (최근 120일 · 작년 같은 시기)")
-    series = load_traffic(cur["portwatch"])
-    if series:
-        by = dict(series)
-        recent = series[-120:]
-        last_year = [by.get((date.fromisoformat(d) - timedelta(days=364)).isoformat()) for d, _ in recent]
-        f3 = go.Figure()
-        f3.add_trace(go.Scatter(x=[d for d, _ in recent], y=last_year, mode="lines", name="작년 같은 시기",
-                                line=dict(color="#cbd5e1", width=2)))
-        f3.add_trace(go.Scatter(x=[d for d, _ in recent], y=[n for _, n in recent], mode="lines", name="올해",
-                                line=dict(color=BLUE, width=2.5)))
-        f3.update_layout(height=230, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
-                         plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="#e2e8f0"),
-                         legend=dict(orientation="h", y=1.1, x=0))
-        st.plotly_chart(f3, width="stretch", config={"displaylogo": False})
-    else:
-        st.caption("통항 데이터가 아직 없습니다.")
+            st.markdown(f"**② 뉴스 사건** · 최근 {nw['avg_days']}일 하루 평균 **{nw['avg']:g}건**, "
+                        f"평소(그 전 {nw['baseline_days']}일 중앙값) **{nw['median']:g}건**")
+        st.caption(f"GDELT: 해협 {cur['radius_km']}km 안, 위치가 확인된 위협·공격·봉쇄 사건. "
+                   "2023 홍해 사태 소급 검증에서 Galaxy Leader 나포 26일 전 첫 경고")
+        if tr and "recent_avg" in tr:
+            st.markdown(f"**③ 실제 통항량** · 최근 7일 하루 **{tr['recent_avg']:g}척**, "
+                        f"작년 같은 7일 **{tr['base_avg']:g}척** ({tr['latest_date']}까지)")
+        st.caption("IMF PortWatch 위성 AIS, 주 1회 갱신 — 사건 뒤에 켜지는 '확인' 지표")
 
-hist = load_history(sid)
-if hist:
-    st.markdown("##### 신호등 기록 (최근 30일, 기본 기준)")
-    f4 = go.Figure(go.Scatter(x=[h["computed_at"] for h in hist], y=[h["level"] for h in hist], mode="lines",
-                              line=dict(shape="hv", color="#0f172a", width=2)))
-    f4.update_layout(height=170, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
-                     plot_bgcolor="rgba(0,0,0,0)",
-                     yaxis=dict(tickvals=[0, 1, 2], ticktext=["정상", "주의", "심각"], range=[-0.3, 2.3],
-                                gridcolor="#e2e8f0"))
-    st.plotly_chart(f4, width="stretch", config={"displaylogo": False})
+    chart = dict(height=210, margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor="rgba(0,0,0,0)",
+                 plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="#e2e8f0"), font=dict(size=11))
+    g1, g2 = st.columns(2)
+    with g1:
+        raw = (statuses[sid] or {}).get("data", {}).get("raw", {})
+        w = list(reversed((raw.get("news_windows") or [])[:30]))
+        if any(x is not None for x in w):
+            end = datetime.strptime(statuses[sid]["computed_at"][:10], "%Y-%m-%d").date()
+            xs = [(end - timedelta(days=len(w) - 1 - i)).strftime("%m/%d") for i in range(len(w))]
+            f2 = go.Figure(go.Bar(x=xs, y=w, marker_color="#93c5fd"))
+            if nw and nw.get("available"):
+                f2.add_hline(y=nw["median"], line=dict(color="#94a3b8", dash="dot"),
+                             annotation_text="평소", annotation_position="bottom left")
+                f2.add_hline(y=nw["threshold"], line=dict(color="#f59e0b", dash="dash"),
+                             annotation_text="주의 기준", annotation_position="top left")
+            f2.update_layout(title=dict(text="뉴스 사건 수 (하루)", font=dict(size=13)), showlegend=False,
+                             xaxis=dict(nticks=8, tickangle=0), **chart)
+            st.plotly_chart(f2, width="stretch", config={"displaylogo": False})
+    with g2:
+        series = load_traffic(cur["portwatch"])
+        if series:
+            by, recent = dict(series), series[-120:]
+            last_year = [by.get((date.fromisoformat(d) - timedelta(days=364)).isoformat()) for d, _ in recent]
+            f3 = go.Figure()
+            f3.add_trace(go.Scatter(x=[d for d, _ in recent], y=last_year, mode="lines", name="작년",
+                                    line=dict(color="#cbd5e1", width=2)))
+            f3.add_trace(go.Scatter(x=[d for d, _ in recent], y=[n for _, n in recent], mode="lines", name="올해",
+                                    line=dict(color=BLUE, width=2.5)))
+            f3.update_layout(title=dict(text="하루 통항 척수", font=dict(size=13)),
+                             legend=dict(orientation="h", y=1.15, x=0.6), **chart)
+            st.plotly_chart(f3, width="stretch", config={"displaylogo": False})
 
-if ok_ev and ev["alternatives"]:
-    st.markdown("##### 대체 항로 비교")
-    rows = [{"항로": "현재 항로", "거리(해리)": f"{ev['distance_nm']:,}", "남은 일수": ev["days"], "차이": "기준",
-             "지나는 해협": ", ".join(f"{LEVELS[s['level']]['icon']} {s['name']}" for s in ev["straits"]) or "없음"}]
-    rows += [{"항로": a["label"], "거리(해리)": f"{a['distance_nm']:,}", "남은 일수": a["days"],
-              "차이": f"{a['delta_days']:+.1f}일",
-              "지나는 해협": ", ".join(f"{LEVELS[s['level']]['icon']} {s['name']}" for s in a["straits"]) or "없음"}
-             for a in ev["alternatives"]]
-    st.dataframe(rows, hide_index=True, width="stretch")
-    st.caption("거리는 주요 항로를 단순화한 항로망 기준 근사값, 일수 = 거리 ÷ (평균 속력 × 24). 운하 통항료·보험료는 포함하지 않습니다.")
+    hist = load_history(sid)
+    if hist:
+        f4 = go.Figure(go.Scatter(x=[h["computed_at"] for h in hist], y=[h["level"] for h in hist], mode="lines",
+                                  line=dict(shape="hv", color="#0f172a", width=2)))
+        f4.update_layout(title=dict(text="신호등 기록 (최근 30일)", font=dict(size=13)), height=170,
+                         margin=dict(l=10, r=10, t=30, b=10), paper_bgcolor="rgba(0,0,0,0)",
+                         plot_bgcolor="rgba(0,0,0,0)", font=dict(size=11),
+                         yaxis=dict(tickvals=[0, 1, 2], ticktext=["정상", "주의", "심각"], range=[-0.3, 2.3],
+                                    gridcolor="#e2e8f0"))
+        st.plotly_chart(f4, width="stretch", config={"displaylogo": False})
 
-st.caption("이 도구는 위험을 맞힌다는 보장이 아니라, 평소와 다른 움직임을 먼저 알려 주는 조기 경보입니다. "
-           "사전 정보가 없는 단발성 사건은 미리 잡을 수 없습니다.")
+st.caption("조기 경보 도구입니다. 평소와 다른 움직임을 먼저 알려 주지만, 사전 정보가 없는 단발성 사건은 미리 잡을 수 없습니다.")

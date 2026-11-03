@@ -125,7 +125,7 @@ def news_windows(strait_id, now_utc=None, days=90):
 # -------------------------------------------------------------
 # 통항량 (IMF PortWatch: 위성 AIS 기반 해협별 하루 통항 척수, 주 1회 갱신)
 # -------------------------------------------------------------
-def portwatch_series(portname, days=400):
+def portwatch_series(portname, days=500):
     """[(date, n_total)] — 12시간 동안은 DB 캐시 사용"""
     key = f"portwatch:{portname}"
     cached, updated = db.load_blob(key)
