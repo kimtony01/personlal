@@ -1,17 +1,18 @@
 import asyncio
 import websockets
 import json
-import os
 from datetime import datetime
-from dotenv import load_dotenv
 
-load_dotenv()
-API_KEY = os.getenv("AISSTREAM_API_KEY")
-print("API KEY:", API_KEY)
+import db
+from collectors import load_ship_history
+from settings import AISSTREAM_API_KEY as API_KEY, SHIP_DATA_PATH, SHIP_HISTORY_PATH
 
 BOUNDING_BOX = [[-90, -180], [90, 180]]
 
-async def collect_and_save():
+
+async def _stream(seconds, mmsis=None):
+    """AISStream 을 seconds 초 동안 구독해서 {mmsi: {name, destination, lat, lon, speed}} 반환.
+    mmsis 를 주면 그 선박들만 구독 (FiltersShipMMSI, 최대 200척)"""
     ships_data = {}
 
     async with websockets.connect("wss://stream.aisstream.io/v0/stream") as websocket:
@@ -20,11 +21,12 @@ async def collect_and_save():
             "BoundingBoxes": [BOUNDING_BOX],
             "FilterMessageTypes": ["PositionReport", "ShipStaticData"]
         }
-        print("전송하는 구독 메시지:", json.dumps(subscribe_message))
+        if mmsis:
+            subscribe_message["FiltersShipMMSI"] = [str(m) for m in mmsis][:200]
         await websocket.send(json.dumps(subscribe_message))
 
         try:
-            async with asyncio.timeout(120):
+            async with asyncio.timeout(seconds):
                 async for message_json in websocket:
                     message = json.loads(message_json)
 
@@ -58,42 +60,60 @@ async def collect_and_save():
         except Exception as e:
             print(f"연결 중 오류 발생 (그래도 지금까지 모은 데이터는 저장합니다): {e}")
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return ships_data
 
-    # ---- 위치 이력 누적 저장 ----
-    history = {}
-    if os.path.exists("ship_history.json"):
-        try:
-            with open("ship_history.json", "r", encoding="utf-8") as f:
-                history = json.load(f)
-        except Exception:
-            history = {}
+
+def _append_history(ships_data, now_str):
+    history = load_ship_history()
 
     for mmsi, info in ships_data.items():
-        if "lat" not in info or "lon" not in info:
+        if info.get("lat") is None or info.get("lon") is None:
             continue
         if mmsi not in history:
             history[mmsi] = {"name": info.get("name", ""), "track": []}
         history[mmsi]["track"].append({
-            "lat": info["lat"], "lon": info["lon"], "time": now_str
+            "lat": info["lat"], "lon": info["lon"], "time": now_str, "speed": info.get("speed")
         })
         history[mmsi]["track"] = history[mmsi]["track"][-50:]
         if info.get("name"):
             history[mmsi]["name"] = info["name"]
 
-    with open("ship_history.json", "w", encoding="utf-8") as f:
-        json.dump(history, f, ensure_ascii=False, indent=2)
+    _save("ship_history", SHIP_HISTORY_PATH, history)
+    return history
 
-    # ---- 현재 스냅샷 저장 ----
+
+def _save(name, path, obj):
+    """Postgres 사용 시 DB 에, 아니면 json 파일에 저장"""
+    if db.USE_PG:
+        db.save_blob(name, obj)
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+
+async def collect_and_save(seconds=120):
+    """전 세계 선박 표본 수집 → ship_data.json(스냅샷) 교체 + ship_history.json 누적"""
+    ships_data = await _stream(seconds)
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    history = _append_history(ships_data, now_str)
+
     result = {
         "updated_at": now_str,
         "ships": ships_data
     }
-    with open("ship_data.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    _save("ship_data", SHIP_DATA_PATH, result)
 
     print(f"저장 완료: {len(ships_data)}척, {now_str}")
     print(f"이력 누적 선박 수: {len(history)}척")
+
+
+async def collect_tracked(mmsis, seconds=90):
+    """등록된 운항 선박만 따로 구독 → 항적 기록에 추가 (스냅샷은 교체하지 않음). 위치를 받은 MMSI 목록 반환"""
+    ships_data = await _stream(seconds, mmsis)
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _append_history(ships_data, now_str)
+    return [m for m, i in ships_data.items() if i.get("lat") is not None]
+
 
 if __name__ == "__main__":
     asyncio.run(collect_and_save())

@@ -1,9 +1,17 @@
-streamlit
-pandas
-numpy
-plotly
-scikit-learn
-python-dotenv
-websockets
-requests
-deep-translator
+# 웹 / 스케줄러
+flask>=3.0
+apscheduler>=3.10,<4
+python-dotenv>=1.0
+
+# 데이터 수집
+requests>=2.31
+websockets>=12
+deep-translator>=1.11
+
+# 지도 / 차트 (plotly.js 는 파이썬 plotly 패키지에서 제공)
+plotly>=5.18
+numpy>=1.26
+
+# 배포 (Render): gunicorn 웹 서버, Postgres(Neon) 드라이버
+gunicorn>=22
+psycopg[binary,pool]>=3.2

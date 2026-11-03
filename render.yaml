@@ -1,0 +1,29 @@
+# Render 배포 설정 (Blueprint). 대시보드에서 New → Blueprint → 이 저장소 선택
+# sync: false 항목은 처음 만들 때 대시보드에서 값을 직접 입력 (git 에 올리지 않음)
+services:
+  - type: web
+    name: route-risk
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    # 워커는 반드시 1개: 워커마다 스케줄러가 떠서 수집·메일이 중복되는 것을 막음
+    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 180 --bind 0.0.0.0:$PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: TZ
+        value: Asia/Seoul
+      - key: DATABASE_URL
+        sync: false
+      - key: NEWSAPI_KEY
+        sync: false
+      - key: AISSTREAM_API_KEY
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: ALERT_RECIPIENTS
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
