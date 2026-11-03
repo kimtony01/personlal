@@ -1,7 +1,8 @@
 """신호등 판단 규칙 — 점수를 더하지 않고, 아래 규칙 중 가장 높은 등급을 씀
 
 심각(2): 공식 Alert·Critical 등급 / 통항 crit% 이상 감소 / 재해 Red
-주의(1): 공식 Advisory·High 등급 / JWC 신규 지정 / 뉴스 사건 이상 신호가 N일 연속 / 통항 warn% 이상 감소 / 재해 Orange
+주의(1): 공식 Advisory·High 등급 / JWC 신규 지정 / 뉴스 사건 7일 평균이 평소의 news_ratio 배 이상 /
+         통항 warn% 이상 감소 / 재해 Orange
 정상(0): 그 외
 뉴스만으로는 '주의'까지만 올림 (기사 자동 분류에는 오차가 있어 단독으로 '심각'을 판단하기엔 근거가 약함)
 """
@@ -28,30 +29,25 @@ def _quantile(values, q):
     return v[lo] + (v[hi] - v[lo]) * (i - lo)
 
 
-def news_eval(windows, top_pct, consecutive, min_days, min_events=3):
+def news_eval(windows, ratio, avg_days, baseline_days, min_days, min_events=3):
     """windows: 24시간 단위 사건 수 목록 (최근 24시간이 앞, 빠진 구간은 None)
 
-    최근 구간이 '과거 하루 기록' 중 상위 top_pct% 안에 들면 이상. 최근부터 연속 이상 일수를 셈
+    최근 avg_days 일 하루 평균 ÷ 평소(그 전 baseline_days 일 중앙값). 최근 기간을 기준에서 빼서
+    몇 주씩 이어지는 상승이 '평소'에 섞여 묻히지 않게 함
     """
-    if not windows or windows[0] is None:
-        return {"available": False, "note": "최근 24시간 뉴스 데이터 없음"}
-    baseline = [w for w in windows[consecutive:] if w is not None]
+    recent = [w for w in (windows or [])[:avg_days] if w is not None]
+    if len(recent) < avg_days - 2:
+        return {"available": False, "note": "최근 뉴스 데이터 부족"}
+    baseline = [w for w in windows[avg_days:avg_days + baseline_days] if w is not None]
+    avg = sum(recent) / len(recent)
     if len(baseline) < min_days:
-        return {"available": False, "note": f"기준 기록 수집 중 ({len(baseline)}/{min_days}일)",
-                "events": windows[0]}
+        return {"available": False, "note": f"평소 기준 수집 중 ({len(baseline)}/{min_days}일)",
+                "events": windows[0], "avg": round(avg, 1)}
     median = _quantile(baseline, 0.5)
-    threshold = max(_quantile(baseline, 1 - top_pct / 100), median, min_events)
-    streak = 0
-    for w in windows[:consecutive + 3]:
-        if w is None or w < threshold or w <= median:
-            break
-        streak += 1
-    cur = windows[0]
-    rank = sum(1 for b in baseline if b >= cur) / len(baseline) * 100   # 상위 몇 %
-    return {"available": True, "events": cur, "median": round(median, 1),
-            "threshold": round(threshold, 1), "ratio": round(cur / median, 1) if median else None,
-            "top_rank_pct": round(max(rank, 100 / len(baseline)), 1), "streak": streak,
-            "baseline_days": len(baseline)}
+    threshold = max(median * ratio, min_events)
+    return {"available": True, "events": windows[0], "avg": round(avg, 1), "median": round(median, 1),
+            "threshold": round(threshold, 1), "ratio": round(avg / median, 1) if median else None,
+            "flag": avg >= threshold, "avg_days": avg_days, "baseline_days": len(baseline)}
 
 
 def evaluate(raw, th, enabled=None):
@@ -91,13 +87,13 @@ def evaluate(raw, th, enabled=None):
 
     # ② 뉴스 사건
     if enabled.get("news"):
-        n = news_eval(raw.get("news_windows"), th["news_top_pct"], th["news_consecutive_days"],
+        n = news_eval(raw.get("news_windows"), th["news_ratio"], th["news_avg_days"], th["news_baseline_days"],
                       th["news_min_baseline_days"])
         layers["news"] = n
-        if n["available"] and n["streak"] >= th["news_consecutive_days"]:
+        if n["available"] and n["flag"]:
             reasons.append({"level": 1, "layer": "news", "url": None,
-                            "text": f"갈등 뉴스 사건이 {n['streak']}일 연속 평소의 {n['ratio']}배 "
-                                    f"(최근 {n['baseline_days']}일 중 상위 {n['top_rank_pct']:g}%)"})
+                            "text": f"갈등 뉴스 사건이 최근 {n['avg_days']}일 평균 하루 {n['avg']:g}건으로 "
+                                    f"평소({n['median']:g}건)의 {n['ratio']}배"})
 
     # ③ 실제 통항량
     if enabled.get("traffic"):

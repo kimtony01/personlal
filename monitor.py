@@ -4,6 +4,7 @@
 결과는 DB(Neon)에 저장되고, Streamlit 화면은 저장된 결과를 읽어 보여 줍니다.
 """
 import logging
+import os
 import tomllib
 from pathlib import Path
 
@@ -60,6 +61,9 @@ def strait_alert(sid, ev, state):
 
 
 def main():
+    if os.getenv("GITHUB_ACTIONS") and not db.USE_PG:
+        # DB 없이 돌면 실행마다 기록이 사라져 같은 경보 메일이 30분마다 반복되므로 멈춤
+        raise SystemExit("DATABASE_URL Secret 이 없습니다. GitHub 저장소 Settings → Secrets 에 추가하세요.")
     errors = {}
     for name, step in (("ais", lambda: ais.collect(CONFIG["ais"]["global_seconds"], CONFIG["ais"]["tracked_seconds"])),
                        ("gdelt", signals.update_gdelt)):

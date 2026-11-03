@@ -223,10 +223,8 @@ with st.sidebar.expander("기준 조절", expanded=False):
     st.caption("바꾼 기준은 이 화면에만 적용됩니다. 메일은 기본 기준(config.toml)으로 판단합니다.")
     for key, label in rules.LAYERS.items():
         enabled[key] = st.toggle(label, value=True, key=f"on_{key}")
-    th["news_top_pct"] = st.slider("뉴스: 평소 기록 중 상위 몇 %부터 이상 신호", 1, 20, th["news_top_pct"],
-                                   key="th_news_top")
-    th["news_consecutive_days"] = st.slider("뉴스: 며칠 연속이면 주의", 1, 3, th["news_consecutive_days"],
-                                            key="th_news_days")
+    th["news_ratio"] = st.slider("뉴스: 최근 7일 평균이 평소의 몇 배면 주의", 1.2, 3.0, float(th["news_ratio"]), 0.1,
+                                 key="th_news_ratio")
     th["traffic_warn_pct"] = st.slider("통항: 몇 % 줄면 주의", 5, 50, th["traffic_warn_pct"], key="th_warn")
     th["traffic_crit_pct"] = st.slider("통항: 몇 % 줄면 심각", 10, 80, th["traffic_crit_pct"], key="th_crit")
     if th["traffic_crit_pct"] <= th["traffic_warn_pct"]:
@@ -270,6 +268,9 @@ st.markdown(f"""
     {f'· 마지막 확인 {last_run[5:16]}' if last_run else ''}</div></div></div>
   <div>{pill(overall, '전체 ' + LEVELS[overall]['label']) if overall is not None else pill(None)}</div>
 </div>""", unsafe_allow_html=True)
+
+if not db.USE_PG:
+    st.warning("DB(DATABASE_URL)가 설정되지 않아 임시 저장소를 쓰고 있습니다. 앱이 재시작되면 등록한 선박이 사라집니다.")
 
 # -------------------------------------------------------------
 # ① 위험 신호등
@@ -502,12 +503,13 @@ if nw is None:
 elif not nw["available"]:
     card(c2, "② 뉴스 사건", f"<div class='muted'>{nw['note']}</div>")
 else:
-    card(c2, "② 뉴스 사건", f"""<div class='big'>{nw['events']:g}건 <span class='muted'>/ 최근 24시간</span></div>
-      <div class='row'><span>평소(중앙값)</span><b>{nw['median']:g}건</b></div>
-      <div class='row'><span>평소 대비</span><b>{nw['ratio'] if nw['ratio'] is not None else '-'}배</b></div>
-      <div class='row'><span>최근 {nw['baseline_days']}일 중</span><b>상위 {nw['top_rank_pct']:g}%</b></div>
-      <div class='row'><span>이상 신호 연속</span><b>{nw['streak']}일</b></div>
-      <div class='muted'>GDELT: 해협 {cur['radius_km']}km 안의 위협·공격·봉쇄 사건</div>""")
+    card(c2, "② 뉴스 사건", f"""<div class='big'>평소의 {nw['ratio'] if nw['ratio'] is not None else '-'}배
+      <span class='muted'>(주의 기준 {th['news_ratio']:g}배)</span></div>
+      <div class='row'><span>최근 {nw['avg_days']}일 하루 평균</span><b>{nw['avg']:g}건</b></div>
+      <div class='row'><span>평소 (그 전 {nw['baseline_days']}일 중앙값)</span><b>{nw['median']:g}건</b></div>
+      <div class='row'><span>최근 24시간</span><b>{nw['events']:g}건</b></div>
+      <div class='muted'>GDELT: 해협 {cur['radius_km']}km 안의 위협·공격·봉쇄 사건.
+      2023 홍해 사태 소급 검증에서 나포 32일 전 첫 경고</div>""")
 
 tr = L.get("traffic")
 if tr is None:
@@ -542,8 +544,10 @@ with g1:
         f2 = go.Figure(go.Bar(x=[f"-{len(w) - 1 - i}일" for i in range(len(w))], y=w, marker_color="#93c5fd",
                               name="갈등 사건 수"))
         if nw and nw.get("available"):
+            f2.add_hline(y=nw["median"], line=dict(color="#94a3b8", dash="dot"),
+                         annotation_text=f"평소 {nw['median']:g}건", annotation_position="bottom left")
             f2.add_hline(y=nw["threshold"], line=dict(color="#f59e0b", dash="dash"),
-                         annotation_text=f"이상 신호 기준 {nw['threshold']:g}건", annotation_position="top left")
+                         annotation_text=f"주의 기준(7일 평균) {nw['threshold']:g}건", annotation_position="top left")
         f2.update_layout(height=230, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
                          plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="#e2e8f0"), showlegend=False)
         st.plotly_chart(f2, width="stretch", config={"displaylogo": False})
