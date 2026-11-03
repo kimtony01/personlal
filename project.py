@@ -3,6 +3,7 @@
 수집·판단·메일은 GitHub Actions 가 30분마다 monitor.py 로 실행하고 결과를 DB(Neon)에 저장합니다.
 이 화면은 저장된 결과를 읽어 보여 주고, 선박 등록과 신호등 기준 조절만 처리합니다.
 """
+import math
 import os
 import tomllib
 from datetime import date, datetime, timedelta
@@ -346,11 +347,72 @@ def strait_markers(fig, ids, highlight=None):
                         line=dict(width=2, color="white")), name=f"{s['name']} {l['label']}", showlegend=False))
 
 
-def base_layout(fig, height=470, fit=True):
+def unwrap_lons(lons):
+    """날짜변경선을 넘을 때 경도가 -180/180 에서 끊기지 않게 이어 붙임 (예: 170, -175 → 170, 185)"""
+    out = [lons[0]]
+    for x in lons[1:]:
+        d = (x - out[-1] + 180) % 360 - 180
+        out.append(out[-1] + d)
+    return out
+
+
+def view_bounds(lines, pad=0.12, aspect=2.0):
+    """보여 줄 범위: (중심 경도, 경도 범위, 위도 범위). lines = 선마다 [(lat, lon), ...]
+
+    날짜변경선을 넘는 항로도 한 덩어리로 이어 계산. 지구 반 바퀴를 넘으면 세계 지도(범위 None)
+    """
+    ref = lines[0][0][1]
+    lats, lons = [], []
+    for line in lines:
+        ul = unwrap_lons([p[1] for p in line])
+        shift = round((ref - ul[0]) / 360) * 360   # 각 선의 시작을 기준 경도 근처로
+        lons += [x + shift for x in ul]
+        lats += [p[0] for p in line]
+    lon0, lon1 = min(lons), max(lons)
+    if lon1 - lon0 > 200:
+        main = unwrap_lons([p[1] for p in lines[0]])
+        return (min(main) + max(main)) / 2, None, None
+    lat0, lat1 = min(lats), max(lats)
+    dlon = max(lon1 - lon0, 12) * (1 + 2 * pad)
+    dlat = max(lat1 - lat0, 8) * (1 + 2 * pad)
+    dlat = max(dlat, dlon / aspect)          # 화면 비율에 맞춰 위도 범위를 넓힘 (가로로 납작해지지 않게)
+    dlon = max(dlon, dlat * aspect * 0.8)
+    clat, clon = (lat0 + lat1) / 2, (lon0 + lon1) / 2
+    lat_rng = [max(clat - dlat / 2, -75), min(clat + dlat / 2, 85)]
+    return clon, [clon - dlon / 2, clon + dlon / 2], lat_rng
+
+
+def ship_shape(lat, lon, heading, pts):
+    """진행 방향으로 회전한 작은 배 모양(뾰족한 뱃머리) 꼭짓점. 크기는 지도에 보이는 항로 범위에 맞춤"""
+    _, lon_rng, lat_rng = view_bounds([pts])
+    span = 140 if lon_rng is None else max(lat_rng[1] - lat_rng[0],
+                                            (lon_rng[1] - lon_rng[0]) * math.cos(math.radians(lat)), 3)
+    size = span * 0.013
+    h = math.radians(heading)
+    fwd, right = (math.sin(h), math.cos(h)), (math.cos(h), -math.sin(h))   # (동, 북) 단위 벡터
+    hull = [(2.2, 0), (0.9, 0.42), (-1.1, 0.42), (-1.3, 0), (-1.1, -0.42), (0.9, -0.42), (2.2, 0)]   # (앞, 옆) 뾰족한 뱃머리
+    out_lat, out_lon = [], []
+    for x, y in hull:
+        east, north = x * fwd[0] + y * right[0], x * fwd[1] + y * right[1]
+        out_lat.append(lat + north * size)
+        out_lon.append(lon + east * size / max(math.cos(math.radians(lat)), 0.2))
+    return out_lat, out_lon
+
+
+def base_layout(fig, height=470, lines=None):
+    """lines 를 주면 그 범위로 확대 (fitbounds 는 날짜변경선을 넘는 항로에서 지도를 반으로 갈라서 직접 계산)"""
+    view = {}
+    if lines:
+        center, lon_rng, lat_rng = view_bounds(lines)
+        view = {"projection_rotation": {"lon": center}}
+        if lon_rng:
+            view |= {"lonaxis": {"range": lon_rng}, "lataxis": {"range": lat_rng}}
     fig.update_layout(
-        geo=dict(projection_type="natural earth", showland=True, landcolor="#e2e8f0", showocean=True,
-                 oceancolor="#f1f7fd", showcountries=True, countrycolor="#cbd5e1", coastlinecolor="#94a3b8",
-                 showframe=False, bgcolor="rgba(0,0,0,0)", **({"fitbounds": "locations"} if fit else {})),
+        geo=dict(projection_type="natural earth", resolution=50, showland=True, landcolor="#e5e7eb",
+                 showocean=True, oceancolor="#eef6fd", showlakes=True, lakecolor="#eef6fd",
+                 showcountries=True, countrycolor="#cbd5e1", countrywidth=0.6,
+                 showcoastlines=True, coastlinecolor="#64748b", coastlinewidth=0.7,
+                 showframe=False, bgcolor="rgba(0,0,0,0)", **view),
         paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0), height=height,
         legend=dict(orientation="h", yanchor="top", y=-0.02, x=0, font=dict(color="#475569", size=12)))
     return fig
@@ -387,14 +449,24 @@ with map_col:
                                         marker=dict(size=11, color="white", line=dict(width=2, color="#0f172a")),
                                         name=f"마지막 수신 위치 ({pos['seen_at'][5:16]})"))
         here = pts[0]
-        fig.add_trace(go.Scattergeo(lat=[here[0]], lon=[here[1]], mode="markers+text", text=[voyage["ship_name"]],
-                                    textposition="bottom center", textfont=dict(color="#0f172a", size=13),
-                                    marker=dict(size=24, color="#0f172a", symbol="star", line=dict(width=2, color="white")),
-                                    name="현재 위치" + (" (추정)" if ev.get("estimated") else ""), hoverinfo="name"))
-        fig.add_trace(go.Scattergeo(lat=[here[0]], lon=[here[1]], mode="markers", hoverinfo="skip", showlegend=False,
-                                    marker=dict(symbol="triangle-up", size=16, color="#f59e0b", angle=ev["heading"],
-                                                angleref="up", line=dict(width=1, color="#0f172a"))))
-        base_layout(fig)
+        live = ev["source"] != "origin"
+        label = {"ais": "현재 위치(AIS)", "estimated": "현재 위치(추정)", "origin": "출발항 기준(위치 미수신)"}[ev["source"]]
+        hull_lat, hull_lon = ship_shape(here[0], here[1], ev["heading"], pts)
+        # 실제 위치 = 진한 배, 위치를 아직 못 받음(출발항 기준) = 흰 배에 진한 테두리
+        fig.add_trace(go.Scattergeo(lat=hull_lat, lon=hull_lon, mode="lines", fill="toself",
+                                    fillcolor="#0f172a" if live else "#ffffff",
+                                    line=dict(width=1.5 if live else 2.5, color="#ffffff" if live else "#0f172a"),
+                                    name=label, hoverinfo="name"))
+        label_lat = max(hull_lat) + (max(hull_lat) - min(hull_lat)) * 0.6   # 배와 겹치지 않게 위로 띄움
+        fig.add_trace(go.Scattergeo(lat=[label_lat], lon=[here[1]], mode="text", text=[voyage["ship_name"]],
+                                    textposition="top center", textfont=dict(color="#0f172a", size=12),
+                                    hoverinfo="skip", showlegend=False))
+        lines = [[tuple(p[:2]) for p in pts]]
+        if len(track) >= 2:
+            lines.append([(t["lat"], t["lon"]) for t in track])
+        for a in (ev["alternatives"][:2] if risky_ahead else []):
+            lines.append([tuple(p[:2]) for p in a["points"]])
+        base_layout(fig, lines=lines)
     else:
         sample = SAMPLE_ROUTES.get(sid)
         if sample:
@@ -404,7 +476,7 @@ with map_col:
                                         name=f"대표 항로: {sample[0]} → {sample[1]}", hoverinfo="name"))
             arrows(fig, [p[:2] for p in r["points"]], BLUE)
         strait_markers(fig, list(STRAITS), sid)
-        base_layout(fig, fit=False)
+        base_layout(fig)
     st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
 
 with info_col:
