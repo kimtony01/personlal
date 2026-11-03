@@ -203,6 +203,8 @@ if voyage:
 
 with st.sidebar.expander("➕ 선박 등록", expanded=not active):
     q = st.text_input("선박명 또는 MMSI(9자리)", placeholder="예: HMM ALGECIRAS 또는 440123000")
+    st.caption("MMSI 찾기: [MarineTraffic](https://www.marinetraffic.com) · [VesselFinder](https://www.vesselfinder.com) "
+               "— 배 이름 검색 → 상세 정보의 MMSI 9자리")
     mmsi, ship_name = None, q.strip()
     if q.strip():
         if q.strip().isdigit() and len(q.strip()) == 9:
