@@ -3,6 +3,7 @@
 DATABASE_URL 환경변수가 있으면 Postgres(배포용, 예: Neon), 없으면 로컬 SQLite 파일을 씁니다.
 쿼리는 두 DB 모두에서 도는 문법만 쓰고, 자리표시자 ? 는 Postgres 일 때 %s 로 바꿉니다.
 """
+import atexit
 import json
 import sqlite3
 import threading
@@ -126,6 +127,7 @@ def _connect_pg():
                 # min_size=0: 쉬는 동안 연결을 닫아 두어 Neon 이 절전(무료 사용 시간 절약)할 수 있게 함
                 _pool = ConnectionPool(DATABASE_URL, open=True, min_size=0, max_size=4, max_idle=120,
                                        kwargs={"row_factory": dict_row}, check=ConnectionPool.check_connection)
+                atexit.register(_pool.close)
     with _pool.connection() as conn:
         if not _initialized:
             with _init_lock:
