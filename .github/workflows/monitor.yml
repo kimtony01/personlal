@@ -1,0 +1,41 @@
+name: 항로 리스크 감시 (수집·위험 계산·경보)
+
+on:
+  schedule:
+    # 매시 7분 (UTC). GitHub 사정에 따라 몇 분~수십 분 늦게 시작될 수 있음
+    - cron: "7 * * * *"
+  workflow_dispatch: {}   # Actions 탭에서 수동 실행
+
+# 이전 실행이 끝나기 전에 다음 실행이 겹치지 않게 (메일 중복 방지)
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: 수집 → 위험 계산 → 운항 평가·경보 메일 (결과는 Neon DB 에 저장)
+        run: python run_jobs.py
+        env:
+          TZ: Asia/Seoul
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+          AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
+          SMTP_HOST: smtp.gmail.com
+          SMTP_PORT: "587"
+          SMTP_SECURITY: starttls
+          SMTP_USER: ${{ secrets.GMAIL_ADDRESS }}
+          SMTP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SMTP_FROM: ${{ secrets.GMAIL_ADDRESS }}
+          ALERT_RECIPIENTS: ${{ secrets.ALERT_EMAIL }}
