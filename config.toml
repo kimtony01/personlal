@@ -1,0 +1,35 @@
+# 신호등 판단 기준 (메일 발송에 쓰는 기본값. 화면에서 슬라이더로 바꾼 값은 그 화면에만 적용)
+
+[rules]
+# 뉴스 사건: 최근 24시간 사건 수가 '이 해협의 과거 하루 기록' 중 상위 몇 %에 들면 이상 신호로 봄
+news_top_pct = 5
+# 이상 신호가 며칠 연속이면 주의로 올릴지 (하루만 튀는 것은 GDELT 자동 분류 오차일 수 있어 무시)
+news_consecutive_days = 2
+# 기준이 될 과거 기록이 이 일수보다 적으면 뉴스 신호는 '기준 수집 중'으로 표시하고 판단에서 뺌
+news_min_baseline_days = 14
+# 통항량: 최근 7일 평균이 작년 같은 시기보다 몇 % 줄면 주의 / 심각
+traffic_warn_pct = 15
+traffic_crit_pct = 30
+# 평소 통항이 하루 이 척수보다 적으면 몇 척 차이로 비율이 크게 흔들려 판단에서 뺌 (예: 북극 베링해협 하루 2~3척)
+traffic_min_daily = 10
+# 재해: 해협에서 이 거리(km) 안의 GDACS 경보만 반영 (열대저기압 / 지진·쓰나미)
+disaster_tc_km = 800
+disaster_eq_km = 300
+# 공식 판단(official_status.toml): 날짜가 이 일수보다 오래되면 '갱신 필요'로 표시하고 판단에서 뺌
+official_max_age_days = 45
+
+[alerts]
+# 같은 대상에 대해 이 시간 안에는 같은 등급 이하 메일을 다시 보내지 않음 (더 높아지면 바로 발송)
+cooldown_hours = 6
+
+[ais]
+# 30분마다 전 세계 선박 표본 수신 시간(초), 등록 선박만 따로 수신하는 시간(초)
+global_seconds = 60
+tracked_seconds = 60
+# 이보다 오래된 위치는 '현재 위치'로 쓰지 않음 (출발항 기준으로 계산)
+position_max_age_hours = 72
+
+[voyage]
+default_speed_kn = 14
+# 대체 항로가 현재 항로보다 이 배수 이상 길면 제시하지 않음
+max_detour_ratio = 2.0

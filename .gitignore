@@ -1,1 +1,8 @@
 .env
+.env.render
+__pycache__/
+monitor.db
+monitor.db-*
+risk_monitor.db
+risk_monitor.db-*
+app.log

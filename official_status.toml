@@ -1,0 +1,75 @@
+# 공식 판단 — 자동으로 가져올 수 없어 직접 관리하는 표
+# 새 발표가 나오면 해당 해협의 값과 date 를 고치고 커밋하세요. date 가 오래되면 화면에 '갱신 필요'로 표시됩니다.
+#
+# msci_level : 미국 MARAD MSCI  ""(없음) / "advisory"(일반 주의) / "alert"(구체적 위협)
+#              https://www.maritime.dot.gov/msci
+# jmic_level : JMIC/UKMTO 위협 등급 그대로 (예: "low", "moderate", "substantial", "high", "severe", "critical")
+#              https://www.ukmto.org/partner-products/jmic-products
+# jwc_listed : Lloyd's JWC 전쟁위험 지정 해역 여부.  jwc_since 가 최근 30일 안이면 '신규 지정'으로 주의
+#
+# 값을 확인하지 못한 칸은 비워 두었습니다(판단에 쓰지 않음).
+
+[hormuz]
+msci_level = ""
+msci_ref = ""
+msci_date = ""
+msci_url = ""
+jmic_level = "critical"
+jmic_date = "2026-03-20"
+jmic_url = "https://www.iranintl.com/en/202603202213"
+jwc_listed = true
+jwc_ref = "JWLA-033"
+jwc_since = "2026-03-03"
+jwc_url = "https://maritimecyprus.com/2026/03/04/joint-war-committee-updates-the-hull-war-piracy-terrorism-and-related-perils-listed-areas-with-iran-3-march-2026-jwla-033/"
+
+[suez]
+msci_level = ""
+msci_ref = ""
+msci_date = ""
+msci_url = ""
+jmic_level = ""
+jmic_date = ""
+jmic_url = ""
+jwc_listed = true
+jwc_ref = "JWLA-032 (홍해 남부·예멘)"
+jwc_since = "2023-12-18"
+jwc_url = "https://maritimecyprus.com/2023/12/18/joint-war-committee-updates-the-hull-war-piracy-terrorism-and-related-perils-listed-areas-25-april-2023-jwla-032/"
+
+[malacca]
+msci_level = ""
+msci_ref = ""
+msci_date = ""
+msci_url = ""
+jmic_level = ""
+jmic_date = ""
+jmic_url = ""
+jwc_listed = false
+jwc_ref = ""
+jwc_since = ""
+jwc_url = ""
+
+[panama]
+msci_level = ""
+msci_ref = ""
+msci_date = ""
+msci_url = ""
+jmic_level = ""
+jmic_date = ""
+jmic_url = ""
+jwc_listed = false
+jwc_ref = ""
+jwc_since = ""
+jwc_url = ""
+
+[arctic]
+msci_level = ""
+msci_ref = ""
+msci_date = ""
+msci_url = ""
+jmic_level = ""
+jmic_date = ""
+jmic_url = ""
+jwc_listed = false
+jwc_ref = ""
+jwc_since = ""
+jwc_url = ""

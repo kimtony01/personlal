@@ -1,0 +1,5 @@
+# GitHub Actions 수집용 (monitor.py) — 화면 라이브러리 없이 가볍게
+python-dotenv
+requests
+websockets>=13
+psycopg[binary,pool]>=3.2

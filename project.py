@@ -1,988 +1,594 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestClassifier
-import json
+"""해상 항로 조기경보 — Streamlit 화면
+
+수집·판단·메일은 GitHub Actions 가 30분마다 monitor.py 로 실행하고 결과를 DB(Neon)에 저장합니다.
+이 화면은 저장된 결과를 읽어 보여 주고, 선박 등록과 신호등 기준 조절만 처리합니다.
+"""
 import os
+import tomllib
+from datetime import date, timedelta
+from pathlib import Path
+
 import requests
-from datetime import datetime, timedelta
-from dotenv import load_dotenv
-from googletrans import Translator
+import streamlit as st
+
+st.set_page_config(page_title="해상 항로 조기경보", page_icon="🌊", layout="wide", initial_sidebar_state="expanded")
+
+# Streamlit Cloud 의 Secrets 를 환경변수로 (db.py 등이 os.getenv 로 읽음)
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
-st.set_page_config(
-    page_title="해상 항로 리스크 조기경보 시스템",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+import plotly.graph_objects as go  # noqa: E402
+
+try:
+    from googletrans import Translator  # 뉴스 제목 한글 번역 (없으면 원문 표시)
+except ImportError:
+    Translator = None
+
+import db  # noqa: E402
+import rules  # noqa: E402
+import voyages  # noqa: E402
+from ports import PORT_DB  # noqa: E402
+from sea_network import find_route  # noqa: E402
+from straits import LEVELS, STRAITS  # noqa: E402
+
+with open(Path(__file__).resolve().parent / "config.toml", "rb") as f:
+    CONFIG = tomllib.load(f)
+
+# 해협별 대표 항로 (등록 선박이 없을 때 대체 항로 비교 예시)
+SAMPLE_ROUTES = {"hormuz": ("담맘항", "울산항"), "suez": ("부산항", "로테르담항"),
+                 "malacca": ("부산항", "뭄바이항"), "panama": ("부산항", "뉴욕항")}
+BLUE, ALT_COLORS = "#2563eb", ["#ea580c", "#16a34a", "#9333ea"]
 
 # -------------------------------------------------------------
-# 스타일 (라이트 SaaS 대시보드 테마)
+# 스타일
 # -------------------------------------------------------------
 st.markdown("""
 <style>
     .stApp { background-color: #f8fafc; }
-    h1 { color: #0f172a !important; font-weight: 800 !important; letter-spacing: -0.5px; }
-    h2, h3 { color: #0f172a !important; font-weight: 700 !important; }
-    .stCaption, p, span, label { color: #64748b !important; }
-
-    /* 상단 헤더 바 */
-    .app-header {
-        display: flex; align-items: center; justify-content: space-between;
-        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;
-        padding: 18px 26px; margin-bottom: 22px;
-        box-shadow: 0 1px 3px rgba(15,23,42,0.06);
-    }
-    .app-header .brand { display: flex; align-items: center; gap: 12px; }
-    .app-header .brand-icon {
-        width: 38px; height: 38px; border-radius: 10px;
-        background: linear-gradient(135deg, #2563eb, #38bdf8);
-        display: flex; align-items: center; justify-content: center;
-        font-size: 1.2rem;
-    }
-    .app-header .brand-title { color: #0f172a; font-weight: 800; font-size: 1.25rem; letter-spacing: -0.3px; }
-    .app-header .brand-sub { color: #94a3b8; font-size: 0.8rem; margin-top: -2px; }
-    .app-header .status-pill {
-        padding: 6px 16px; border-radius: 999px; font-weight: 700; font-size: 0.85rem;
-        border: 1px solid transparent;
-    }
-
-    /* 카드형 메트릭 */
-    div[data-testid="stMetric"] {
-        background: #ffffff;
-        border: 1px solid #e2e8f0; border-radius: 14px;
-        padding: 16px 20px; box-shadow: 0 1px 3px rgba(15,23,42,0.05);
-    }
-    div[data-testid="stMetricLabel"] { color: #64748b !important; font-size: 0.82rem !important; font-weight: 600 !important; }
-    div[data-testid="stMetricValue"] { color: #0f172a !important; font-weight: 800 !important; }
-
+    .block-container { padding-top: 2rem; max-width: 1400px; }
+    h1, h2, h3 { color: #0f172a !important; font-weight: 700 !important; letter-spacing: -0.3px; }
+    .stCaption, p, label { color: #64748b; }
     section[data-testid="stSidebar"] { background-color: #ffffff; border-right: 1px solid #e2e8f0; }
-    section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
-        color: #0f172a !important; font-size: 1.0rem !important;
-    }
-    section[data-testid="stSidebar"] .stCaption, section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] span, section[data-testid="stSidebar"] label { color: #64748b !important; }
-
-    div[data-testid="stAlert"] { border-radius: 12px; border: 1px solid #e2e8f0; }
-    div[data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: #ffffff; border-radius: 14px; border: 1px solid #e2e8f0; padding: 8px 4px;
-        box-shadow: 0 1px 3px rgba(15,23,42,0.05);
-    }
-    hr { border-color: #e2e8f0 !important; }
-    .stButton button {
-        background-color: #2563eb; color: white; border-radius: 10px; border: none; font-weight: 600;
-    }
-    .stButton button:hover { background-color: #1d4ed8; }
-    div[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; border: 1px solid #e2e8f0; }
+    div[data-testid="stVerticalBlockBorderWrapper"] { background: #ffffff; border-radius: 14px; }
     a { color: #2563eb !important; text-decoration: none !important; font-weight: 600; }
 
-    /* 뉴스/상황 카드 */
-    .info-card {
-        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px;
-        padding: 18px 20px; box-shadow: 0 1px 3px rgba(15,23,42,0.05);
-    }
-    .news-card {
-        background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;
-        padding: 12px 16px; margin-bottom: 10px;
-    }
-    .risk-badge {
-        display: inline-block; padding: 4px 14px; border-radius: 20px;
-        font-size: 0.85rem; font-weight: 700; margin-top: 6px;
-        border: 1px solid transparent;
-    }
+    .app-header { display: flex; align-items: center; justify-content: space-between; background: #fff;
+        border: 1px solid #e2e8f0; border-radius: 16px; padding: 16px 24px; margin-bottom: 18px;
+        box-shadow: 0 1px 3px rgba(15,23,42,0.06); }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .brand-icon { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #2563eb, #38bdf8);
+        display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }
+    .brand-title { color: #0f172a; font-weight: 800; font-size: 1.2rem; }
+    .brand-sub { color: #94a3b8; font-size: 0.8rem; }
+    .pill { display: inline-block; padding: 3px 12px; border-radius: 999px; font-weight: 700; font-size: 0.8rem; }
+
+    .sig-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px 16px;
+        min-height: 128px; box-shadow: 0 1px 3px rgba(15,23,42,0.05); }
+    .sig-card.sel { border: 2px solid #2563eb; }
+    .sig-name { color: #0f172a; font-weight: 800; font-size: 1.02rem; }
+    .sig-region { color: #94a3b8; font-size: 0.75rem; margin-bottom: 8px; }
+    .sig-why { color: #475569; font-size: 0.8rem; margin-top: 8px; line-height: 1.4; }
+
+    .banner { border-radius: 14px; padding: 16px 20px; margin: 6px 0 18px; border: 1px solid transparent; }
+    .banner b { color: #0f172a; }
+    .banner ul { margin: 6px 0 0 0; padding-left: 18px; }
+    .banner li { color: #334155; font-size: 0.9rem; }
+
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px 18px;
+        box-shadow: 0 1px 3px rgba(15,23,42,0.05); margin-bottom: 12px; }
+    .card h4 { margin: 0 0 8px; color: #0f172a; font-size: 0.98rem; }
+    .card .big { color: #0f172a; font-weight: 800; font-size: 1.3rem; }
+    .card .muted { color: #64748b; font-size: 0.82rem; line-height: 1.5; }
+    .row { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid #f1f5f9;
+        font-size: 0.86rem; color: #334155; }
+    .row:last-child { border-bottom: none; }
+    .news-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------------------------------------------
-# 방향 화살표 헬퍼
-# -------------------------------------------------------------
-def calc_bearing(lat1, lon1, lat2, lon2):
-    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
-    dlon = lon2 - lon1
-    x = np.sin(dlon) * np.cos(lat2)
-    y = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
-    bearing = np.degrees(np.arctan2(x, y))
-    return (bearing + 360) % 360
 
-def add_direction_arrows(fig, lat_list, lon_list, color, size=11, n_arrows=3):
-    n_points = len(lat_list)
-    if n_points < 2:
-        return
-    positions = np.linspace(0, n_points - 2, n_arrows).astype(int)
-    arrow_lat, arrow_lon, arrow_angle = [], [], []
-    for i in positions:
-        lat1, lon1 = lat_list[i], lon_list[i]
-        lat2, lon2 = lat_list[i + 1], lon_list[i + 1]
-        mid_lat = (lat1 + lat2) / 2
-        mid_lon = (lon1 + lon2) / 2
-        bearing = calc_bearing(lat1, lon1, lat2, lon2)
-        arrow_lat.append(mid_lat)
-        arrow_lon.append(mid_lon)
-        arrow_angle.append(bearing)
+def pill(level, text=None):
+    lv = LEVELS[level]
+    return (f"<span class='pill' style='background:{lv['bg']};color:{lv['color']}'>"
+            f"{lv['icon']} {text or lv['label']}</span>")
 
-    fig.add_trace(go.Scattergeo(
-        lat=arrow_lat, lon=arrow_lon,
-        mode="markers",
-        marker=dict(
-            symbol="triangle-up", size=size, color=color,
-            angle=arrow_angle, angleref="up",
-            line=dict(width=1, color="white")
-        ),
-        showlegend=False, hoverinfo="skip"
-    ))
 
 # -------------------------------------------------------------
-# 항구 데이터베이스 & 자동 항로 판단
+# 데이터 읽기
 # -------------------------------------------------------------
-PORT_DB = {
-    # 동아시아 - 한국
-    "부산항": {"lat": 35.1, "lon": 129.0, "region": "동아시아"},
-    "인천항": {"lat": 37.45, "lon": 126.6, "region": "동아시아"},
-    "광양항": {"lat": 34.9, "lon": 127.75, "region": "동아시아"},
-    "울산항": {"lat": 35.5, "lon": 129.38, "region": "동아시아"},
-    "평택항": {"lat": 36.97, "lon": 126.82, "region": "동아시아"},
-    "군산항": {"lat": 35.97, "lon": 126.6, "region": "동아시아"},
-    "목포항": {"lat": 34.78, "lon": 126.38, "region": "동아시아"},
+@st.cache_data(ttl=120, show_spinner=False)
+def load_statuses():
+    return {sid: db.latest_status(sid) for sid in STRAITS}
 
-    # 동아시아 - 중국
-    "상하이항": {"lat": 31.2, "lon": 121.5, "region": "동아시아"},
-    "닝보항": {"lat": 29.9, "lon": 121.5, "region": "동아시아"},
-    "선전항": {"lat": 22.5, "lon": 114.1, "region": "동아시아"},
-    "광저우항": {"lat": 23.1, "lon": 113.3, "region": "동아시아"},
-    "칭다오항": {"lat": 36.1, "lon": 120.3, "region": "동아시아"},
-    "톈진항": {"lat": 39.0, "lon": 117.7, "region": "동아시아"},
-    "샤먼항": {"lat": 24.5, "lon": 118.1, "region": "동아시아"},
-    "다롄항": {"lat": 38.9, "lon": 121.6, "region": "동아시아"},
-    "잉커우항": {"lat": 40.27, "lon": 122.23, "region": "동아시아"},
-    "롄윈강항": {"lat": 34.6, "lon": 119.4, "region": "동아시아"},
-    "옌톈항": {"lat": 22.57, "lon": 114.27, "region": "동아시아"},
 
-    # 동아시아 - 대만/홍콩
-    "가오슝항": {"lat": 22.6, "lon": 120.3, "region": "동아시아"},
-    "지룽항": {"lat": 25.1, "lon": 121.7, "region": "동아시아"},
-    "타이중항": {"lat": 24.28, "lon": 120.5, "region": "동아시아"},
-    "홍콩항": {"lat": 22.3, "lon": 114.2, "region": "동아시아"},
+@st.cache_data(ttl=120, show_spinner=False)
+def load_history(sid):
+    return db.status_history(sid, 30)
 
-    # 동아시아 - 일본
-    "요코하마항": {"lat": 35.4, "lon": 139.6, "region": "동아시아"},
-    "고베항": {"lat": 34.7, "lon": 135.2, "region": "동아시아"},
-    "나고야항": {"lat": 35.05, "lon": 136.9, "region": "동아시아"},
-    "오사카항": {"lat": 34.65, "lon": 135.4, "region": "동아시아"},
-    "도쿄항": {"lat": 35.62, "lon": 139.77, "region": "동아시아"},
-    "하카타항": {"lat": 33.6, "lon": 130.4, "region": "동아시아"},
-    "시미즈항": {"lat": 35.02, "lon": 138.5, "region": "동아시아"},
 
-    # 동남아시아
-    "싱가포르항": {"lat": 1.3, "lon": 103.8, "region": "동남아시아"},
-    "포트클랑": {"lat": 3.0, "lon": 101.4, "region": "동남아시아"},
-    "탄중펠레파스항": {"lat": 1.36, "lon": 103.55, "region": "동남아시아"},
-    "페낭항": {"lat": 5.4, "lon": 100.35, "region": "동남아시아"},
-    "람차방항": {"lat": 13.1, "lon": 100.9, "region": "동남아시아"},
-    "방콕항": {"lat": 13.7, "lon": 100.57, "region": "동남아시아"},
-    "호치민항": {"lat": 10.8, "lon": 106.7, "region": "동남아시아"},
-    "하이퐁항": {"lat": 20.85, "lon": 106.7, "region": "동남아시아"},
-    "다낭항": {"lat": 16.1, "lon": 108.2, "region": "동남아시아"},
-    "마닐라항": {"lat": 14.6, "lon": 120.95, "region": "동남아시아"},
-    "세부항": {"lat": 10.3, "lon": 123.9, "region": "동남아시아"},
-    "자카르타(탄중프리옥)": {"lat": -6.1, "lon": 106.88, "region": "동남아시아"},
-    "수라바야항": {"lat": -7.2, "lon": 112.73, "region": "동남아시아"},
-    "프놈펜항": {"lat": 11.55, "lon": 104.9, "region": "동남아시아"},
-    "양곤항": {"lat": 16.77, "lon": 96.17, "region": "동남아시아"},
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_traffic(portname):
+    data, _ = db.load_blob(f"portwatch:{portname}")
+    return data or []
 
-    # 남아시아
-    "뭄바이항": {"lat": 18.9, "lon": 72.8, "region": "남아시아"},
-    "문드라항": {"lat": 22.8, "lon": 69.7, "region": "남아시아"},
-    "첸나이항": {"lat": 13.1, "lon": 80.3, "region": "남아시아"},
-    "콜카타항": {"lat": 22.55, "lon": 88.3, "region": "남아시아"},
-    "코친항": {"lat": 9.97, "lon": 76.25, "region": "남아시아"},
-    "콜롬보항": {"lat": 6.95, "lon": 79.85, "region": "남아시아"},
-    "치타공항": {"lat": 22.35, "lon": 91.8, "region": "남아시아"},
-    "카라치항": {"lat": 24.85, "lon": 66.98, "region": "남아시아"},
 
-    # 중동
-    "두바이(제벨알리)": {"lat": 25.0, "lon": 55.1, "region": "중동"},
-    "제다항": {"lat": 21.5, "lon": 39.2, "region": "중동"},
-    "담맘항": {"lat": 26.5, "lon": 50.2, "region": "중동"},
-    "아바단항": {"lat": 30.35, "lon": 48.3, "region": "중동"},
-    "반다르아바스항": {"lat": 27.15, "lon": 56.25, "region": "중동"},
-    "도하항": {"lat": 25.3, "lon": 51.6, "region": "중동"},
-    "쿠웨이트항(슈아이바)": {"lat": 29.05, "lon": 48.15, "region": "중동"},
-    "살랄라항": {"lat": 17.0, "lon": 54.1, "region": "중동"},
-    "아쉬도드항": {"lat": 31.8, "lon": 34.65, "region": "중동"},
-    "하이파항": {"lat": 32.8, "lon": 35.0, "region": "중동"},
-    "아카바항": {"lat": 29.5, "lon": 35.0, "region": "중동"},
-
-    # 유럽
-    "로테르담항": {"lat": 51.9, "lon": 4.5, "region": "유럽"},
-    "함부르크항": {"lat": 53.5, "lon": 10.0, "region": "유럽"},
-    "앤트워프항": {"lat": 51.2, "lon": 4.4, "region": "유럽"},
-    "발렌시아항": {"lat": 39.4, "lon": -0.3, "region": "유럽"},
-    "알헤시라스항": {"lat": 36.1, "lon": -5.45, "region": "유럽"},
-    "바르셀로나항": {"lat": 41.35, "lon": 2.15, "region": "유럽"},
-    "제노바항": {"lat": 44.4, "lon": 8.9, "region": "유럽"},
-    "라스페치아항": {"lat": 44.1, "lon": 9.83, "region": "유럽"},
-    "피레에프스항": {"lat": 37.95, "lon": 23.6, "region": "유럽"},
-    "브레머하펜항": {"lat": 53.55, "lon": 8.6, "region": "유럽"},
-    "르아브르항": {"lat": 49.5, "lon": 0.1, "region": "유럽"},
-    "마르세유항": {"lat": 43.3, "lon": 5.35, "region": "유럽"},
-    "사우샘프턴항": {"lat": 50.9, "lon": -1.4, "region": "유럽"},
-    "펠릭스토우항": {"lat": 51.95, "lon": 1.35, "region": "유럽"},
-    "런던항": {"lat": 51.5, "lon": 0.05, "region": "유럽"},
-    "가담스크항": {"lat": 54.35, "lon": 18.65, "region": "유럽"},
-    "이스탄불항": {"lat": 41.0, "lon": 28.95, "region": "유럽"},
-    "코페르항": {"lat": 45.55, "lon": 13.73, "region": "유럽"},
-    "리스본항": {"lat": 38.7, "lon": -9.15, "region": "유럽"},
-    "오슬로항": {"lat": 59.9, "lon": 10.75, "region": "유럽"},
-    "고텐부르크항": {"lat": 57.7, "lon": 11.95, "region": "유럽"},
-    "상트페테르부르크항": {"lat": 59.93, "lon": 30.3, "region": "유럽"},
-
-    # 미주 동안
-    "뉴욕항": {"lat": 40.7, "lon": -74.0, "region": "미주동안"},
-    "사바나항": {"lat": 32.1, "lon": -81.1, "region": "미주동안"},
-    "찰스턴항": {"lat": 32.8, "lon": -79.9, "region": "미주동안"},
-    "노퍽항": {"lat": 36.85, "lon": -76.3, "region": "미주동안"},
-    "마이애미항": {"lat": 25.77, "lon": -80.17, "region": "미주동안"},
-    "잭슨빌항": {"lat": 30.4, "lon": -81.6, "region": "미주동안"},
-    "볼티모어항": {"lat": 39.27, "lon": -76.6, "region": "미주동안"},
-    "휴스턴항": {"lat": 29.7, "lon": -95.1, "region": "미주동안"},
-    "뉴올리언스항": {"lat": 29.95, "lon": -90.05, "region": "미주동안"},
-
-    # 미주 서안
-    "로스앤젤레스항": {"lat": 33.7, "lon": -118.3, "region": "미주서안"},
-    "롱비치항": {"lat": 33.8, "lon": -118.2, "region": "미주서안"},
-    "오클랜드항": {"lat": 37.8, "lon": -122.3, "region": "미주서안"},
-    "시애틀항": {"lat": 47.6, "lon": -122.35, "region": "미주서안"},
-    "타코마항": {"lat": 47.25, "lon": -122.44, "region": "미주서안"},
-    "밴쿠버항": {"lat": 49.3, "lon": -123.1, "region": "미주서안"},
-    "만사니요항(멕시코)": {"lat": 19.05, "lon": -104.3, "region": "미주서안"},
-    "라자로카르데나스항": {"lat": 17.95, "lon": -102.2, "region": "미주서안"},
-
-    # 남미
-    "산토스항": {"lat": -23.9, "lon": -46.3, "region": "남미"},
-    "리우데자네이루항": {"lat": -22.9, "lon": -43.17, "region": "남미"},
-    "부에노스아이레스항": {"lat": -34.6, "lon": -58.35, "region": "남미"},
-    "카야오항": {"lat": -12.05, "lon": -77.15, "region": "남미"},
-    "카르타헤나항": {"lat": 10.4, "lon": -75.5, "region": "남미"},
-    "발파라이소항": {"lat": -33.05, "lon": -71.6, "region": "남미"},
-    "과야킬항": {"lat": -2.2, "lon": -79.9, "region": "남미"},
-    "몬테비데오항": {"lat": -34.9, "lon": -56.2, "region": "남미"},
-
-    # 아프리카
-    "더반항": {"lat": -29.9, "lon": 31.0, "region": "아프리카"},
-    "케이프타운항": {"lat": -33.9, "lon": 18.45, "region": "아프리카"},
-    "라고스항": {"lat": 6.45, "lon": 3.4, "region": "아프리카"},
-    "몸바사항": {"lat": -4.05, "lon": 39.65, "region": "아프리카"},
-    "탕헤르항": {"lat": 35.75, "lon": -5.8, "region": "아프리카"},
-    "다카르항": {"lat": 14.7, "lon": -17.45, "region": "아프리카"},
-    "알렉산드리아항": {"lat": 31.2, "lon": 29.9, "region": "아프리카"},
-    "포트사이드항": {"lat": 31.25, "lon": 32.3, "region": "아프리카"},
-    "아비장항": {"lat": 5.3, "lon": -4.0, "region": "아프리카"},
-    "카사블랑카항": {"lat": 33.6, "lon": -7.6, "region": "아프리카"},
-
-    # 오세아니아
-    "시드니항": {"lat": -33.85, "lon": 151.2, "region": "오세아니아"},
-    "멜버른항": {"lat": -37.85, "lon": 144.9, "region": "오세아니아"},
-    "브리즈번항": {"lat": -27.4, "lon": 153.15, "region": "오세아니아"},
-    "프리맨틀항": {"lat": -32.05, "lon": 115.75, "region": "오세아니아"},
-    "오클랜드항(뉴질랜드)": {"lat": -36.85, "lon": 174.75, "region": "오세아니아"},
-    "애들레이드항": {"lat": -34.85, "lon": 138.5, "region": "오세아니아"},
-}
-
-REGION_ROUTE_MAP = {
-    ("동아시아", "유럽"): "수에즈 / 홍해 (아시아-유럽)",
-    ("동아시아", "미주동안"): "파나마 운하 (아시아-미주)",
-    ("동아시아", "미주서안"): None,
-    ("동아시아", "동남아시아"): "말라카 해협 (동남아-동아시아)",
-    ("동아시아", "남아시아"): "말라카 해협 (동남아-동아시아)",
-    ("동아시아", "중동"): "말라카 해협 (동남아-동아시아)",
-    ("동아시아", "오세아니아"): "말라카 해협 (동남아-동아시아)",
-    ("동남아시아", "중동"): "호르무즈 해협 (중동-동아시아)",
-    ("동남아시아", "오세아니아"): None,
-    ("중동", "유럽"): "수에즈 / 홍해 (아시아-유럽)",
-    ("중동", "동아시아"): "호르무즈 해협 (중동-동아시아)",
-    ("중동", "미주동안"): "수에즈 / 홍해 (아시아-유럽)",
-    ("남아시아", "유럽"): "수에즈 / 홍해 (아시아-유럽)",
-    ("유럽", "미주동안"): None,
-    ("아프리카", "동아시아"): "말라카 해협 (동남아-동아시아)",
-    ("아프리카", "유럽"): "수에즈 / 홍해 (아시아-유럽)",
-    ("아프리카", "미주동안"): None,
-    ("남미", "동아시아"): None,
-    ("남미", "유럽"): None,
-}
-
-def determine_route(origin_port, dest_port):
-    if origin_port not in PORT_DB or dest_port not in PORT_DB:
-        return None, "항구 정보를 찾을 수 없습니다. 목록에서 선택해주세요."
-
-    origin_region = PORT_DB[origin_port]["region"]
-    dest_region = PORT_DB[dest_port]["region"]
-
-    if origin_region == dest_region:
-        return None, "같은 권역 내 운항으로, 주요 초크포인트를 지나지 않습니다."
-
-    route_key = REGION_ROUTE_MAP.get((origin_region, dest_region))
-    if route_key is None:
-        route_key = REGION_ROUTE_MAP.get((dest_region, origin_region))
-
-    if route_key is None:
-        return None, f"{origin_region} → {dest_region} 구간은 주요 초크포인트 없이 직항 가능한 항로입니다."
-
-    return route_key, f"{origin_port} → {dest_port}: **{route_key.split(' (')[0]}** 통과 예상"
-
-# -------------------------------------------------------------
-# 데이터 정의
-# -------------------------------------------------------------
-ROUTE_DB = {
-    "파나마 운하 (아시아-미주)": {
-        "news_keyword": "Panama Canal",
-        "standard_risk_factors": {"news_cnt": 15, "weather_dist_km": 300, "threat_level": 3},
-        "ship_location": {"lat": 9.38, "lon": -79.92, "name": "파나마 운하 대기 구역"},
-        "threat_zone": {"lat": 9.08, "lon": -79.68, "name": "가툰 호수 가뭄/통항 제한 구역"},
-        "standard_path": {
-            "lat": [35.1, 33.0, 30.0, 25.0, 20.0, 15.0, 10.0, 8.9, 9.35, 15.0, 20.0, 25.0, 30.0, 35.0, 40.7],
-            "lon": [129.0, 140.0, 155.0, 175.0, -170.0, -140.0, -100.0, -79.7, -79.9, -77.0, -80.0, -78.0, -75.0, -73.0, -74.0]
-        },
-        "alternatives": [
-            {"route_name": "우회: 수에즈 운하 경유", "transit_time_days": 34, "cost_index_pct": 130, "safety_score": 80,
-             "war_risk_insurance": "할증 가능",
-             "eligibility": {"한국": "통행 가능", "미국": "조건부", "중국": "통행 가능", "영국": "조건부", "이스라엘": "통행 불가"},
-             "status": "추천 우회로",
-             "recommendation_reason": "대기 지연 없이 정시 도착 보장, 대형선 운항에 안정적.",
-             "path_lat": [35.1, 25.0, 15.0, 5.0, 1.3, 5.0, 12.5, 20.0, 27.0, 31.0, 34.0, 36.0, 38.0, 40.7],
-             "path_lon": [129.0, 120.0, 110.0, 105.0, 103.8, 90.0, 44.0, 38.0, 34.0, 32.3, 20.0, -5.6, -30.0, -74.0]}
-        ]
-    },
-    "수에즈 / 홍해 (아시아-유럽)": {
-        "news_keyword": "Red Sea shipping",
-        "standard_risk_factors": {"news_cnt": 28, "weather_dist_km": 800, "threat_level": 4},
-        "ship_location": {"lat": 12.8, "lon": 44.5, "name": "아덴만 진입부"},
-        "threat_zone": {"lat": 14.5, "lon": 42.5, "name": "홍해 남부 분쟁 위험 구역"},
-        "standard_path": {
-            "lat": [35.1, 25.0, 15.0, 5.0, 1.3, 5.0, 12.5, 16.0, 20.0, 27.0, 31.0, 34.0, 36.0, 40.0, 45.0, 51.9],
-            "lon": [129.0, 120.0, 110.0, 105.0, 103.8, 90.0, 44.0, 40.0, 38.0, 34.0, 32.3, 20.0, -5.6, -12.0, -8.0, 4.3]
-        },
-        "alternatives": [
-            {"route_name": "우회: 아프리카 희망봉", "transit_time_days": 38, "cost_index_pct": 142, "safety_score": 95,
-             "war_risk_insurance": "일반 요율",
-             "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "영국": "통행 가능", "중국": "통행 가능", "이스라엘": "통행 가능"},
-             "status": "최우선 권장",
-             "recommendation_reason": "13일 추가되지만 피격 위험 0%, 전쟁보험료 면제.",
-             "path_lat": [35.1, 20.0, 5.0, 1.3, -10.0, -20.0, -30.0, -34.8, -30.0, -15.0, 0.0, 15.0, 25.0, 36.0, 40.0, 45.0, 51.9],
-             "path_lon": [129.0, 115.0, 100.0, 103.8, 60.0, 45.0, 25.0, 20.0, 12.0, 8.0, -5.0, -12.0, -13.0, -9.5, -15.0, -8.0, 4.3]}
-        ]
-    },
-    "호르무즈 해협 (중동-동아시아)": {
-        "news_keyword": "Strait of Hormuz",
-        "standard_risk_factors": {"news_cnt": 18, "weather_dist_km": 500, "threat_level": 4},
-        "ship_location": {"lat": 26.5, "lon": 56.5, "name": "호르무즈 해협 진입부"},
-        "threat_zone": {"lat": 26.8, "lon": 55.8, "name": "호르무즈 북부 군사 긴장 구역"},
-        "standard_path": {
-            "lat": [27.0, 24.0, 20.0, 15.0, 10.0, 5.0, 1.3, 5.0, 12.0, 18.0, 22.0, 27.0, 33.0, 35.1],
-            "lon": [56.5, 60.0, 65.0, 68.0, 75.0, 85.0, 103.8, 105.0, 110.0, 113.0, 118.0, 122.0, 127.0, 129.0]
-        },
-        "alternatives": [
-            {"route_name": "대체: 얀부항(홍해) 파이프라인 연계", "transit_time_days": 19, "cost_index_pct": 135, "safety_score": 85,
-             "war_risk_insurance": "일반 요율",
-             "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "영국": "통행 가능", "중국": "통행 가능", "이스라엘": "조건부"},
-             "status": "파이프라인 연계안",
-             "recommendation_reason": "호르무즈 완전 우회, 봉쇄 시 유일한 현실적 대체 공급망.",
-             "path_lat": [24.1, 18.0, 12.5, 8.0, 3.0, 1.3, 5.0, 12.0, 18.0, 22.0, 27.0, 33.0, 35.1],
-             "path_lon": [38.0, 41.0, 44.0, 55.0, 70.0, 103.8, 105.0, 110.0, 113.0, 118.0, 122.0, 127.0, 129.0]}
-        ]
-    },
-    "말라카 해협 (동남아-동아시아)": {
-        "news_keyword": "Strait of Malacca",
-        "standard_risk_factors": {"news_cnt": 4, "weather_dist_km": 120, "threat_level": 2},
-        "ship_location": {"lat": 2.5, "lon": 101.8, "name": "말라카 해협 중앙"},
-        "threat_zone": {"lat": 4.0, "lon": 100.5, "name": "열대성 폭풍/해적 빈발 구역"},
-        "standard_path": {
-            "lat": [1.3, 3.0, 6.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.1],
-            "lon": [103.8, 101.5, 103.0, 108.0, 112.0, 117.0, 121.0, 125.0, 129.0]
-        },
-        "alternatives": [
-            {"route_name": "우회: 순다/롬복 해협", "transit_time_days": 12, "cost_index_pct": 125, "safety_score": 90,
-             "war_risk_insurance": "일반 요율",
-             "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
-             "status": "기상 회피안",
-             "recommendation_reason": "초강력 태풍 발생 시 동인도네시아 심해 수로로 안전 항해.",
-                          "path_lat": [-6.0, -8.7, -6.0, -3.0, 2.0, 5.0, 10.0, 18.0, 25.0, 35.1],
-             "path_lon": [105.5, 115.8, 119.0, 122.0, 124.0, 126.0, 127.0, 128.0, 128.5, 129.0]}
-        ]
-    },
-    "북극항로 (아시아-유럽, 북동항로)": {
-        "news_keyword": "Arctic Northern Sea Route",
-        "standard_risk_factors": {"news_cnt": 10, "weather_dist_km": 400, "threat_level": 3},
-        "is_arctic": True,
-        "ship_location": {"lat": 73.0, "lon": 100.0, "name": "북극해 러시아 연안 항로 구간"},
-        "threat_zone": {"lat": 76.0, "lon": 90.0, "name": "해빙/제재 리스크 구역 (러시아 관할)"},
-        "standard_path": {
-            "lat": [35.1, 45.0, 55.0, 65.0, 70.0, 73.0, 76.0, 73.0, 68.0, 60.0, 51.9],
-            "lon": [129.0, 135.0, 140.0, 145.0, 130.0, 100.0, 70.0, 40.0, 20.0, 10.0, 4.3]
-        },
-        "alternatives": [
-            {"route_name": "우회: 수에즈 / 홍해 경유", "transit_time_days": 30, "cost_index_pct": 115, "safety_score": 75,
-             "war_risk_insurance": "일반 요율",
-             "eligibility": {"한국": "통행 가능", "미국": "통행 가능", "중국": "통행 가능", "영국": "통행 가능", "이스라엘": "통행 가능"},
-             "status": "표준 대체로",
-             "recommendation_reason": "북극항로 결빙/제재 리스크 회피, 연중 안정적으로 운항 가능한 검증된 항로.",
-             "path_lat": [35.1, 25.0, 15.0, 5.0, 1.3, 5.0, 12.5, 16.0, 20.0, 27.0, 31.0, 34.0, 36.0, 40.0, 45.0, 51.9],
-             "path_lon": [129.0, 120.0, 110.0, 105.0, 103.8, 90.0, 44.0, 40.0, 38.0, 34.0, 32.3, 20.0, -5.6, -12.0, -8.0, 4.3]}
-        ]
-    }
-}
-
-def calc_rule_score(news_cnt, weather_dist, threat_level):
-    return min(100, int((news_cnt * 1.2) + max(0, (600 - weather_dist) * 0.08) + (threat_level * 10)))
-def get_arctic_season_info():
-    """북극항로 계절별 항해 가능 여부 판단 (실제 NSR 운항 패턴 기준)"""
-    month = datetime.now().month
-    if month in [8, 9]:
-        return 1, "해빙 최소기 — 항해 최적 시즌 (쇄빙선 지원 없이도 가능)"
-    elif month in [7, 10]:
-        return 2, "해빙 감소기 — 항해 가능하나 쇄빙선 에스코트 권장"
-    elif month in [6, 11]:
-        return 4, "해빙 전환기 — 항해 난도 급상승, 쇄빙선 필수"
-    else:
-        return 5, "결빙기 (12~5월) — 두꺼운 해빙으로 상업 운항 사실상 불가"
-
-# -------------------------------------------------------------
-# 모델
-# -------------------------------------------------------------
-@st.cache_resource
-def get_trained_risk_model():
-    np.random.seed(42)
-    X = np.random.rand(400, 4)
-    X[:, 0] *= 50; X[:, 1] *= 1000; X[:, 2] = (X[:, 2] - 0.5) * 200; X[:, 3] = np.random.randint(1, 6, 400)
-    risk_score = (X[:, 0]*0.3) + ((1000-X[:, 1])*0.05) + (X[:, 2]*0.2) + (X[:, 3]*10)
-    y = np.where(risk_score > 65, 2, np.where(risk_score > 35, 1, 0))
-    model = RandomForestClassifier(n_estimators=30, random_state=42)
-    model.fit(X, y)
-    return model
-
-model = get_trained_risk_model()
-
-# -------------------------------------------------------------
-# 뉴스: 실제 기사 가져오기 (번역 + 출처, 실패시 화면에 직접 에러 표시)
-# -------------------------------------------------------------
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_news(query, display=6):
     api_key = os.getenv("NEWSAPI_KEY")
     if not api_key:
         return None
-    url = "https://newsapi.org/v2/everything"
-    params = {"q": query, "language": "en", "sortBy": "relevancy", "pageSize": display, "apiKey": api_key}
     try:
-        res = requests.get(url, params=params, timeout=8)
+        res = requests.get("https://newsapi.org/v2/everything", timeout=8, params={
+            "q": query, "language": "en", "sortBy": "publishedAt", "pageSize": display, "apiKey": api_key})
         res.raise_for_status()
-        articles = res.json().get("articles", [])
-        results = []
-        translator = Translator()
-        for a in articles:
-            title_en = a.get("title") or ""
-            desc_en = a.get("description") or ""
-            source_name = (a.get("source") or {}).get("name", "출처 미상")
-
-            title_ko = title_en
-            desc_ko = desc_en
-
-            if title_en:
+        translator, results = Translator() if Translator else None, []
+        for a in res.json().get("articles", []):
+            title, desc = a.get("title") or "", a.get("description") or ""
+            if translator:
                 try:
-                    title_ko = translator.translate(title_en[:500], src="en", dest="ko").text
-                except Exception as e:
-                    st.sidebar.error(f"번역 실패(제목): {e}")
-
-            if desc_en:
-                try:
-                    desc_ko = translator.translate(desc_en[:500], src="en", dest="ko").text
-                except Exception as e:
-                    st.sidebar.error(f"번역 실패(본문): {e}")
-
-            results.append({
-                "title": title_ko,
-                "link": a.get("url", "#"),
-                "desc": desc_ko,
-                "source": source_name
-            })
+                    title = translator.translate(title[:500], src="en", dest="ko").text if title else title
+                    desc = translator.translate(desc[:500], src="en", dest="ko").text if desc else desc
+                except Exception:
+                    pass  # 번역 실패 시 원문 표시
+            results.append({"title": title, "link": a.get("url", "#"), "desc": desc,
+                            "source": (a.get("source") or {}).get("name", "출처 미상"),
+                            "date": (a.get("publishedAt") or "")[:10]})
         return results
     except Exception as e:
-        st.sidebar.error(f"뉴스 가져오기 실패: {e}")
-        return []
+        return {"error": str(e)}
 
-# -------------------------------------------------------------
-# 뉴스: 건수 자동 집계
-# -------------------------------------------------------------
-@st.cache_data(ttl=600)
-def fetch_news_count(query):
-    api_key = os.getenv("NEWSAPI_KEY")
-    if not api_key:
-        return None, None
-    url = "https://newsapi.org/v2/everything"
-    today = datetime.now()
-    try:
-        p_recent = {
-            "q": query, "language": "en",
-            "from": (today - timedelta(days=7)).strftime("%Y-%m-%d"),
-            "to": today.strftime("%Y-%m-%d"),
-            "pageSize": 1,
-            "apiKey": api_key
-        }
-        p_prev = {
-            "q": query, "language": "en",
-            "from": (today - timedelta(days=14)).strftime("%Y-%m-%d"),
-            "to": (today - timedelta(days=7)).strftime("%Y-%m-%d"),
-            "pageSize": 1,
-            "apiKey": api_key
-        }
-        r_recent = requests.get(url, params=p_recent, timeout=8).json().get("totalResults", 0)
-        r_prev = requests.get(url, params=p_prev, timeout=8).json().get("totalResults", 0)
-        growth = int(((r_recent - r_prev) / max(r_prev, 1)) * 100)
-        return r_recent, growth
-    except Exception as e:
-        st.sidebar.error(f"뉴스 건수 집계 실패: {e}")
-        return None, None
 
-def predict_risk(news_cnt, weather_dist, news_growth, threat_level):
-    features = np.array([[news_cnt, weather_dist, news_growth, threat_level]])
-    pred = model.predict(features)[0]
-    prob = model.predict_proba(features)[0]
-    return pred, prob
-
-# -------------------------------------------------------------
-# 뉴스 종합 요약 (키워드 기반 이슈 탐지)
-# -------------------------------------------------------------
 ISSUE_KEYWORDS_KO = {
-    "공격/충돌": ["공격", "충돌", "드론", "폭격", "미사일", "전격", "타격"],
-    "봉쇄/장악": ["봉쇄", "장악", "통제", "폐쇄", "차단"],
+    "공격/충돌": ["공격", "충돌", "드론", "폭격", "미사일", "타격"],
+    "봉쇄/장악": ["봉쇄", "장악", "통제", "폐쇄", "차단", "나포"],
     "제재": ["제재", "금수"],
-    "기상 악화": ["폭풍", "태풍", "허리케인", "기상", "해일"],
+    "기상 악화": ["폭풍", "태풍", "허리케인", "해일"],
     "지연/정체": ["지연", "정체", "대기", "혼잡"],
 }
 
-def summarize_news_situation(news_items, route_name):
-    if not news_items:
-        return None
 
-    combined = " ".join([(n.get("title") or "") + " " + (n.get("desc") or "") for n in news_items])
+def summarize_news(items):
+    combined = " ".join((n.get("title") or "") + " " + (n.get("desc") or "") for n in items)
+    found = sorted(((k, sum(combined.count(w) for w in ws)) for k, ws in ISSUE_KEYWORDS_KO.items()),
+                   key=lambda x: -x[1])
+    issues = [k for k, n in found if n > 0][:3]
+    return {"count": len(items), "sources": len({n["source"] for n in items}),
+            "issues": ", ".join(issues) if issues else "뚜렷한 위협 이슈 없음 (일상적 운항 관련 보도 위주)"}
 
-    detected = []
-    for issue, keywords in ISSUE_KEYWORDS_KO.items():
-        hits = sum(combined.count(k) for k in keywords)
-        if hits > 0:
-            detected.append((issue, hits))
-    detected.sort(key=lambda x: -x[1])
-    top_issues = [d[0] for d in detected[:3]]
-
-    source_count = len(set(n.get("source", "") for n in news_items if n.get("source")))
-    issue_text = ", ".join(top_issues) if top_issues else "뚜렷한 위협 이슈 없음 (일상적 운항 관련 보도 위주)"
-
-    return {
-        "article_count": len(news_items),
-        "source_count": source_count,
-        "issue_text": issue_text,
-        "headline": news_items[0]["title"] if news_items else "",
-    }
 
 # -------------------------------------------------------------
-# 사이드바
+# 사이드바: 내 선박 · 신호등 기준
 # -------------------------------------------------------------
-st.sidebar.title("⚓ 대시보드 설정")
+st.sidebar.markdown("### 🚢 내 선박")
+active = db.list_voyages()
+voyage_opts = {None: "선택 안 함"} | {v["id"]: f"{v['ship_name']} · {v['origin']}→{v['dest']}" for v in active}
+# 처음 열었을 때는 가장 최근 등록 선박을 선택
+default_vid = st.session_state.get("voyage_id", "unset")
+sel_vid = st.sidebar.selectbox("추적 중인 선박", list(voyage_opts), format_func=voyage_opts.get,
+                               index=list(voyage_opts).index(default_vid) if default_vid in voyage_opts else
+                               (1 if len(voyage_opts) > 1 else 0))
+st.session_state["voyage_id"] = sel_vid
+voyage = next((v for v in active if v["id"] == sel_vid), None)
+if voyage:
+    st.sidebar.caption(f"MMSI {voyage['mmsi'] or '없음 (출발항 기준 계산)'} · 속력 {voyage['speed_kn']}노트 · "
+                       f"알림 {voyage['recipients'] or '없음'}")
+    if st.sidebar.button("운항 종료", width="stretch"):
+        db.end_voyage(voyage["id"])
+        st.session_state["voyage_id"] = None
+        st.rerun()
 
-# --- ① 실시간 선박 위치 검색 (실제 AIS 데이터) ---
-st.sidebar.subheader("🛰️ 실시간 선박 위치 검색")
-real_ship_data, selected_mmsi = None, None
-if os.path.exists("ship_data.json"):
-    with open("ship_data.json", "r", encoding="utf-8") as f:
-        real_ship_data = json.load(f)
-    st.sidebar.caption(f"업데이트: {real_ship_data['updated_at']}")
-    ship_options = {m: (i.get("name","").strip() or f"MMSI:{m}") for m,i in real_ship_data["ships"].items() if "lat" in i}
-
-    if ship_options:
-        search_term = st.sidebar.text_input("선박명으로 검색 (예: PROTI)")
-        if search_term:
-            filtered = {k: v for k, v in ship_options.items() if search_term.upper() in v.upper()}
+with st.sidebar.expander("➕ 선박 등록", expanded=not active):
+    q = st.text_input("선박명 또는 MMSI(9자리)", placeholder="예: HMM ALGECIRAS 또는 440123000")
+    mmsi, ship_name = None, q.strip()
+    if q.strip():
+        if q.strip().isdigit() and len(q.strip()) == 9:
+            mmsi = q.strip()
+            found = db.get_ship(mmsi)
+            ship_name = (found or {}).get("name") or f"MMSI {mmsi}"
+            st.caption(f"✓ AIS 기록: {found['name']} (마지막 수신 {found['seen_at'][5:16]})" if found
+                       else "아직 AIS 기록 없음 — 다음 수집부터 이 번호로 추적합니다")
         else:
-            filtered = ship_options
-        if filtered:
-            selected_mmsi = st.sidebar.selectbox("추적할 실제 선박", list(filtered.keys()), format_func=lambda x: filtered[x])
+            cands = db.search_ships(q)
+            labels = {None: "목록에 없음 — 이름만 등록 (출발항 기준 계산)"}
+            labels |= {c["mmsi"]: f"{c['name']} · MMSI {c['mmsi']} · {(c['seen_at'] or '')[5:16]}" for c in cands}
+            pick = st.selectbox(f"AIS에서 찾은 선박 {len(cands)}척", list(labels), format_func=labels.get,
+                                index=1 if len(cands) == 1 else 0)
+            if pick:
+                mmsi, ship_name = pick, next(c["name"] for c in cands if c["mmsi"] == pick)
+    port_list = list(PORT_DB)
+    origin = st.selectbox("출발항", port_list, index=port_list.index("부산항"))
+    dest = st.selectbox("도착항", port_list, index=port_list.index("로테르담항"))
+    speed = st.number_input("평균 속력 (노트)", 5.0, 30.0, float(CONFIG["voyage"]["default_speed_kn"]), 0.5)
+    email = st.text_input("경보 받을 메일 (쉼표로 여러 명)", value=os.getenv("ALERT_RECIPIENTS", ""))
+    if st.button("등록하고 추적 시작", width="stretch", disabled=not ship_name):
+        if origin == dest:
+            st.error("출발항과 도착항이 같습니다.")
         else:
-            st.sidebar.caption("검색 결과 없음")
-            selected_mmsi = None
-    else:
-        st.sidebar.info("현재 저장된 선박 위치 데이터가 없습니다.")
-else:
-    st.sidebar.caption("ship_data.json 없음 — collector.py 실행 필요")
+            vid = db.add_voyage(ship_name, mmsi, origin, dest, speed,
+                                ",".join(e.strip() for e in email.split(",") if "@" in e))
+            st.session_state["voyage_id"] = vid
+            st.rerun()
 
-st.sidebar.divider()
-
-# --- ② 가상 항로 리스크 시뮬레이션 (실제 선박과 무관, 출발-도착 구간 위험도 분석용) ---
-st.sidebar.subheader("🧭 가상 항로 리스크 시뮬레이션")
-st.sidebar.caption("실제 선박과는 무관하게, 출발항→도착항 구간의 위험도를 미리 분석하는 기능입니다.")
-ship_name = st.sidebar.text_input("선박명 (시나리오 라벨)", value="HANJIN GLORY")
-ship_nationality = st.sidebar.selectbox("선박 국적 (기국)", ["한국", "미국", "중국", "영국", "이스라엘", "이란"])
-
-port_list = list(PORT_DB.keys())
-origin_port = st.sidebar.selectbox("출발항", port_list, index=port_list.index("부산항"))
-dest_port = st.sidebar.selectbox("도착항", port_list, index=port_list.index("로테르담항"))
-
-auto_route_key, route_message = determine_route(origin_port, dest_port)
-
-if auto_route_key:
-    st.sidebar.success(route_message)
-    selected_route_key = auto_route_key
-else:
-    st.sidebar.warning(route_message)
-    selected_route_key = list(ROUTE_DB.keys())[0]
-
-st.sidebar.divider()
-st.sidebar.subheader("위협 감지 파라미터 (선택 항로 기준)")
-curr_route_data = ROUTE_DB[selected_route_key]
-
-auto_news_cnt, auto_news_growth = fetch_news_count(curr_route_data["news_keyword"])
-
-if auto_news_cnt is not None:
-    st.sidebar.caption(f"📡 실시간 자동 집계: {auto_news_cnt}건 (증가율 {auto_news_growth:+d}%)")
-    use_auto = st.sidebar.checkbox("자동 집계값 사용", value=True)
-else:
-    use_auto = False
-    st.sidebar.caption("⚠ 자동 집계 실패 — 수동 입력을 사용합니다")
-
-if use_auto and auto_news_cnt is not None:
-    news_count = min(auto_news_cnt, 60)
-    news_growth = max(min(auto_news_growth, 200), -50)
-    c1, c2 = st.sidebar.columns(2)
-    c1.metric("뉴스 건수(자동)", news_count)
-    c2.metric("증가율(자동)", f"{news_growth:+d}%")
-else:
-    news_count = st.sidebar.slider("분쟁/이슈 뉴스 건수 (수동)", 0, 60, curr_route_data["standard_risk_factors"]["news_cnt"])
-    news_growth = st.sidebar.slider("뉴스량 전일 대비 증가율 (수동, %)", -50, 200, 40)
-
-weather_distance = st.sidebar.slider("기상/위협 최근접 거리 (km)", 50, 1200, curr_route_data["standard_risk_factors"]["weather_dist_km"])
-
-arctic_season_level, arctic_season_msg = get_arctic_season_info()
-
-if curr_route_data.get("is_arctic", False):
-    st.sidebar.info(f"🧊 계절 자동 반영: {arctic_season_msg}")
-    geopolitical_level = arctic_season_level
-    st.sidebar.metric("지정학/계절 텐션 지수 (자동)", f"{geopolitical_level}/5")
-else:
-    geopolitical_level = st.sidebar.select_slider("지정학적 위협 텐션 지수", options=[1,2,3,4,5], value=curr_route_data["standard_risk_factors"]["threat_level"])
-
-alert_email = st.sidebar.text_input("비상 알림 수신 이메일", value="shipping_ops@trade.com")
-send_alert_btn = st.sidebar.button("비상 알림 수동 발송")
+st.sidebar.markdown("### ⚙️ 신호등 기준")
+th = dict(CONFIG["rules"])
+enabled = {}
+with st.sidebar.expander("기준 조절", expanded=False):
+    st.caption("바꾼 기준은 이 화면에만 적용됩니다. 메일은 기본 기준(config.toml)으로 판단합니다.")
+    for key, label in rules.LAYERS.items():
+        enabled[key] = st.toggle(label, value=True, key=f"on_{key}")
+    th["news_top_pct"] = st.slider("뉴스: 평소 기록 중 상위 몇 %부터 이상 신호", 1, 20, th["news_top_pct"],
+                                   key="th_news_top")
+    th["news_consecutive_days"] = st.slider("뉴스: 며칠 연속이면 주의", 1, 3, th["news_consecutive_days"],
+                                            key="th_news_days")
+    th["traffic_warn_pct"] = st.slider("통항: 몇 % 줄면 주의", 5, 50, th["traffic_warn_pct"], key="th_warn")
+    th["traffic_crit_pct"] = st.slider("통항: 몇 % 줄면 심각", 10, 80, th["traffic_crit_pct"], key="th_crit")
+    if th["traffic_crit_pct"] <= th["traffic_warn_pct"]:
+        st.caption("⚠ '심각' 기준이 '주의' 기준보다 커야 합니다.")
+    if st.button("기본값으로", width="stretch"):
+        for k in [k for k in st.session_state if k.startswith(("on_", "th_"))]:
+            del st.session_state[k]
+        st.rerun()
 
 # -------------------------------------------------------------
-# 전체 항로 리스크 일괄 계산
+# 판단 (저장된 원래 값 + 현재 기준)
 # -------------------------------------------------------------
-route_risk_summary = {}
-for key, data in ROUTE_DB.items():
-    is_arctic = data.get("is_arctic", False)
-    if key == selected_route_key:
-        n, w, g = news_count, weather_distance, news_growth
-        t = arctic_season_level if is_arctic else geopolitical_level
-    else:
-        f = data["standard_risk_factors"]
-        n, w, g = f["news_cnt"], f["weather_dist_km"], 0
-        t = arctic_season_level if is_arctic else f["threat_level"]
-    pred, prob = predict_risk(n, w, g, t)
-    route_risk_summary[key] = {"pred": pred, "prob": prob, "rule": calc_rule_score(n, w, t)}
+statuses = load_statuses()
+evals = {sid: (rules.evaluate(s["data"]["raw"], th, enabled) if s else {"level": None, "reasons": [], "layers": {}})
+         for sid, s in statuses.items()}
+levels = {sid: {"level": e["level"], "reason": rules.headline(e)} for sid, e in evals.items()}
+last_run = max((s["computed_at"] for s in statuses.values() if s), default=None)
 
-sel_pred = route_risk_summary[selected_route_key]["pred"]
-sel_prob = route_risk_summary[selected_route_key]["prob"]
-sel_rule = route_risk_summary[selected_route_key]["rule"]
-labels = {0: "정상 (LOW)", 1: "경고 (MEDIUM)", 2: "심각 (HIGH)"}
-risk_level_str = labels[sel_pred]
-ALERT_TRIGGERED = sel_pred >= 1
+ev = None
+if voyage:
+    try:
+        ev = voyages.evaluate(voyage, levels, CONFIG["ais"]["position_max_age_hours"],
+                              CONFIG["voyage"]["max_detour_ratio"])
+    except Exception as e:
+        ev = {"error": str(e)}
 
-curr_data = ROUTE_DB[selected_route_key]
-scored_alternatives = []
-for r in curr_data["alternatives"]:
-    passage = r["eligibility"].get(ship_nationality, "확인 필요")
-    penalty = 60 if any(k in passage for k in ["불가","표적","나포"]) else (20 if "조건부" in passage else 0)
-    eff_safety = max(0, r["safety_score"] - penalty)
-    cost_score = max(0, 100 - (r["cost_index_pct"]-100)*1.2)
-    time_score = max(0, 100 - (r["transit_time_days"]-8)*2.0)
-    total = round(eff_safety*0.5 + cost_score*0.3 + time_score*0.2, 1)
-    item = dict(r); item["total_score"]=total; item["passage_status"]=passage
-    scored_alternatives.append(item)
-scored_alternatives.sort(key=lambda x: x["total_score"], reverse=True)
-best_alt = scored_alternatives[0] if scored_alternatives else None
+if "strait" not in st.session_state:
+    ahead = [s for s in (ev or {}).get("straits", []) if (s["level"] or 0) >= 1]
+    worst = max(STRAITS, key=lambda s: evals[s]["level"] or 0)
+    st.session_state["strait"] = ahead[0]["id"] if ahead else worst
+overall = max([e["level"] for e in evals.values() if e["level"] is not None], default=None)
 
 # -------------------------------------------------------------
-# 메인 화면
+# 헤더
 # -------------------------------------------------------------
-pill_bg, pill_color = {
-    0: ("#dcfce7", "#15803d"),
-    1: ("#fef3c7", "#b45309"),
-    2: ("#fee2e2", "#b91c1c"),
-}[sel_pred]
-
 st.markdown(f"""
 <div class="app-header">
-    <div class="brand">
-        <div class="brand-icon">🌊</div>
-        <div>
-            <div class="brand-title">해상 항로 리스크 조기경보 시스템</div>
-            <div class="brand-sub">Maritime Route Risk Early Warning &amp; Alternative Route Recommendation</div>
-        </div>
-    </div>
-    <div class="status-pill" style="background:{pill_bg}; color:{pill_color};">
-        {selected_route_key.split(' (')[0]} · {risk_level_str}
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-st.info(f"👈 사이드바에서 출발항/도착항을 선택하면 자동으로 항로가 판단됩니다. 현재 선택: **{selected_route_key}**")
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("선택 항로 리스크", risk_level_str)
-col2.metric("규칙 기반 점수", f"{sel_rule} / 100")
-col3.metric("AI 예측 위험 확률", f"{sel_prob[2]*100:.1f}%")
-col4.metric("정상 항로 수", f"{sum(1 for v in route_risk_summary.values() if v['pred']==0)} / {len(ROUTE_DB)}")
-
-st.divider()
-st.subheader("🌍 전 세계 주요 항로 리스크 현황")
-
-fig_world = go.Figure()
-status_color = {0: "#22c55e", 1: "#eab308", 2: "#ef4444"}
-status_label = {0: "정상", 1: "경고", 2: "심각"}
-
-for key, data in ROUTE_DB.items():
-    risk = route_risk_summary[key]
-    tz = data["threat_zone"]
-    is_selected = (key == selected_route_key)
-    line_color = "#22d3ee" if is_selected else "#334155"
-    path_lat = data["standard_path"]["lat"]
-    path_lon = data["standard_path"]["lon"]
-
-    fig_world.add_trace(go.Scattergeo(
-        lat=path_lat, lon=path_lon, mode="lines",
-        line=dict(width=8 if is_selected else 3, color=line_color),
-        opacity=0.15, showlegend=False, hoverinfo="skip"
-    ))
-    fig_world.add_trace(go.Scattergeo(
-        lat=path_lat, lon=path_lon, mode="lines",
-        line=dict(width=2.5 if is_selected else 1, color=line_color),
-        showlegend=False, hoverinfo="skip"
-    ))
-    if is_selected:
-        add_direction_arrows(fig_world, path_lat, path_lon, line_color, size=13, n_arrows=3)
-
-    fig_world.add_trace(go.Scattergeo(
-        lat=[tz["lat"]], lon=[tz["lon"]], mode="markers+text",
-        marker=dict(size=26 if is_selected else 18, color=status_color[risk["pred"]],
-                    line=dict(width=3 if is_selected else 1, color="white")),
-        text=[key.split(" (")[0]], textposition="top center",
-        textfont=dict(color="#0f172a", size=11),
-        name=f"{key} — {status_label[risk['pred']]}",
-        hovertext=f"{key}<br>상태: {status_label[risk['pred']]}", hoverinfo="text"
-    ))
-
-fig_world.update_layout(
-    geo=dict(projection_type="natural earth", showland=True, landcolor="rgb(226,232,240)",
-        oceancolor="rgb(248,250,252)", showocean=True, showcoastlines=True, coastlinecolor="rgb(203,213,225)",
-        showcountries=True, countrycolor="rgb(203,213,225)", bgcolor="rgba(0,0,0,0)", lakecolor="rgb(248,250,252)"),
-    paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=10,b=0), height=480,
-    legend=dict(orientation="h", yanchor="bottom", y=-0.1, font=dict(color="#0f172a", size=11))
-)
-st.plotly_chart(fig_world, use_container_width=True)
+  <div class="brand"><div class="brand-icon">🌊</div>
+    <div><div class="brand-title">해상 항로 조기경보</div>
+    <div class="brand-sub">공식 경보 · 뉴스 사건 · 실제 통항량 · 재해로 판단 · 30분마다 자동 갱신
+    {f'· 마지막 확인 {last_run[5:16]}' if last_run else ''}</div></div></div>
+  <div>{pill(overall, '전체 ' + LEVELS[overall]['label']) if overall is not None else pill(None)}</div>
+</div>""", unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 선택 항로 상세 지도
+# ① 위험 신호등
 # -------------------------------------------------------------
-st.divider()
-st.subheader(f"🔍 상세 보기: {selected_route_key}")
+cols = st.columns(len(STRAITS))
+for col, (sid, s) in zip(cols, STRAITS.items()):
+    e = evals[sid]
+    why = rules.headline(e)
+    col.markdown(f"""
+<div class="sig-card {'sel' if sid == st.session_state['strait'] else ''}">
+  <div class="sig-name">{s['name']}</div><div class="sig-region">{s['region']}</div>
+  {pill(e['level'])}
+  <div class="sig-why">{why if len(why) < 70 else why[:68] + '…'}</div>
+</div>""", unsafe_allow_html=True)
+    if col.button("자세히", key=f"pick_{sid}", width="stretch"):
+        st.session_state["strait"] = sid
+        st.rerun()
 
-ship_loc = curr_data["ship_location"]
-threat_loc = curr_data["threat_zone"]
-std_path = curr_data["standard_path"]
+sid = st.session_state["strait"]
+cur, e = STRAITS[sid], evals[sid]
+lv = LEVELS[e["level"]]
+reason_items = "".join(f"<li>{r['text']}" + (f" · <a href='{r['url']}' target='_blank'>출처</a>" if r.get("url") else "")
+                       + "</li>" for r in e["reasons"])
+st.markdown(f"""
+<div class="banner" style="background:{lv['bg']}; border-color:{lv['color']}33;">
+  <b style="font-size:1.05rem;">{lv['icon']} {cur['name']} — {lv['label']}</b>
+  {'<ul>' + reason_items + '</ul>' if reason_items else
+   f"<div style='color:#334155;font-size:0.9rem;margin-top:4px;'>{rules.headline(e)}</div>"}
+</div>""", unsafe_allow_html=True)
 
-fig_detail = go.Figure()
-fig_detail.add_trace(go.Scattergeo(
-    lat=std_path["lat"], lon=std_path["lon"], mode="lines",
-    line=dict(width=8, color="#3b82f6"), opacity=0.15, showlegend=False, hoverinfo="skip"
-))
-fig_detail.add_trace(go.Scattergeo(
-    lat=std_path["lat"], lon=std_path["lon"], mode="lines",
-    line=dict(width=3, color="#3b82f6"), name="표준 항로"
-))
-add_direction_arrows(fig_detail, std_path["lat"], std_path["lon"], "#3b82f6", size=14, n_arrows=4)
-
-threat_color = "#ef4444" if ALERT_TRIGGERED else "#64748b"
-fig_detail.add_trace(go.Scattergeo(
-    lat=[threat_loc["lat"]], lon=[threat_loc["lon"]], mode="markers+text",
-    marker=dict(size=22, color=threat_color), text=[threat_loc["name"]],
-    textposition="top center", textfont=dict(color="#0f172a"),
-    name="⚠ 위협 감지 구역" if ALERT_TRIGGERED else "모니터링 구역"
-))
-fig_detail.add_trace(go.Scattergeo(
-    lat=[ship_loc["lat"]], lon=[ship_loc["lon"]], mode="markers+text",
-    marker=dict(size=16, color="#f59e0b", symbol="triangle-up"), text=[ship_name],
-    textposition="bottom center", textfont=dict(color="#0f172a"), name="시나리오 선박"
-))
-if ALERT_TRIGGERED and best_alt:
-    fig_detail.add_trace(go.Scattergeo(
-        lat=best_alt["path_lat"], lon=best_alt["path_lon"], mode="lines",
-        line=dict(width=4, color="#dc3545", dash="dash"), name=f"추천 대체: {best_alt['route_name']}"
-    ))
-    add_direction_arrows(fig_detail, best_alt["path_lat"], best_alt["path_lon"], "#dc3545", size=14, n_arrows=4)
-
-if real_ship_data:
-    other_lat, other_lon, other_name = [], [], []
-    my_lat = my_lon = my_name = None
-    for m, info in real_ship_data["ships"].items():
-        if "lat" not in info: continue
-        if m == selected_mmsi:
-            my_lat, my_lon = info["lat"], info["lon"]
-            my_name = info.get("name","").strip() or f"MMSI:{m}"
-        else:
-            other_lat.append(info["lat"]); other_lon.append(info["lon"])
-            other_name.append(info.get("name","").strip() or f"MMSI:{m}")
-
-    if other_lat:
-        fig_detail.add_trace(go.Scattergeo(lat=other_lat, lon=other_lon, mode="markers",
-            marker=dict(size=4, color="#94a3b8", opacity=0.5), text=other_name, hoverinfo="text",
-            name="실시간 다른 선박"))
-
-    if my_lat:
-        fig_detail.add_trace(go.Scattergeo(lat=[my_lat], lon=[my_lon], mode="markers+text",
-            marker=dict(size=18, color="#dc2626", symbol="star", line=dict(width=2, color="white")),
-            text=[my_name], textposition="top center", textfont=dict(color="#0f172a"), name="내 지정 선박"))
-
-        if os.path.exists("ship_history.json"):
-            with open("ship_history.json", "r", encoding="utf-8") as f:
-                ship_history = json.load(f)
-            if selected_mmsi in ship_history:
-                track = ship_history[selected_mmsi]["track"]
-                if len(track) >= 2:
-                    track_lat = [p["lat"] for p in track]
-                    track_lon = [p["lon"] for p in track]
-                    fig_detail.add_trace(go.Scattergeo(
-                        lat=track_lat, lon=track_lon, mode="lines+markers",
-                        line=dict(width=3, color="#22c55e"),
-                        marker=dict(size=4, color="#22c55e"),
-                        name="실제 이동 항적 (수집된 기록)"
-                    ))
-                else:
-                    st.caption(f"⚠ {my_name}의 이동 항적은 {len(track)}개 지점만 수집됨 — collector.py를 여러 번 더 실행하면 실제 항적이 그려집니다.")
-
-fig_detail.update_layout(
-    geo=dict(projection_type="equirectangular", showland=True, landcolor="rgb(226,232,240)",
-        oceancolor="rgb(248,250,252)", showocean=True, showcoastlines=True, coastlinecolor="rgb(203,213,225)",
-        showcountries=True, countrycolor="rgb(203,213,225)",
-        center=dict(lat=ship_loc["lat"], lon=ship_loc["lon"]), projection_scale=2.2, bgcolor="rgba(0,0,0,0)"),
-    paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0,r=0,t=10,b=0), height=550,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, font=dict(color="#0f172a"))
-)
-st.plotly_chart(fig_detail, use_container_width=True)
 
 # -------------------------------------------------------------
-# 상황판단 + 뉴스
+# ② 지도 + 추적 선박 + 대체 항로
 # -------------------------------------------------------------
-st.divider()
-news_items = fetch_news(curr_data["news_keyword"])
-col_status, col_news = st.columns([1.3, 1])
+def arrows(fig, pts, color, n=4):
+    """경로 위 진행 방향 화살표"""
+    if len(pts) < 2:
+        return
+    idx = sorted({int(i * (len(pts) - 2) / max(n - 1, 1)) for i in range(n)})
+    lat, lon, ang = [], [], []
+    for i in idx:
+        (a1, o1), (a2, o2) = pts[i], pts[i + 1]
+        lat.append((a1 + a2) / 2)
+        lon.append((o1 + o2) / 2)
+        ang.append(voyages.bearing(a1, o1, a2, o2))
+    fig.add_trace(go.Scattergeo(lat=lat, lon=lon, mode="markers", hoverinfo="skip", showlegend=False,
+                                marker=dict(symbol="triangle-up", size=11, color=color, angle=ang, angleref="up",
+                                            line=dict(width=1, color="white"))))
 
-with col_status:
-    st.subheader("현재 상황 판단")
-    if ALERT_TRIGGERED:
-        if sel_pred == 2:
-            st.error(f"🔴 심각 등급 — {threat_loc['name']} 인근 위협 감지")
-        else:
-            st.warning(f"🟡 경고 등급 — {threat_loc['name']} 인근 리스크 상승")
 
-        st.markdown(f"""
-<div class="info-card" style='color:#334155; line-height:1.9;'>
-<b style='color:#0f172a; font-size:1.05rem;'>우려 요인</b><br>
-- 관련 뉴스: <b style='color:#d97706;'>{news_count}건</b> (전일 대비 {news_growth:+d}%)<br>
-- 위협 최근접 거리: <b style='color:#d97706;'>{weather_distance}km</b><br>
-- 지정학적 텐션: <b style='color:#d97706;'>{geopolitical_level}/5</b><br><br>
-<b style='color:#0f172a; font-size:1.05rem;'>권장 조치</b>: <span style='color:#2563eb;'>{best_alt['route_name']}</span> 전환 검토
-</div>
-""", unsafe_allow_html=True)
+def strait_markers(fig, ids, highlight=None):
+    for s_id in ids:
+        s, l = STRAITS[s_id], LEVELS[evals[s_id]["level"]]
+        fig.add_trace(go.Scattergeo(
+            lat=[s["lat"]], lon=[s["lon"]], mode="markers+text", text=[s["name"]], textposition="top center",
+            textfont=dict(color="#0f172a", size=12), hovertext=f"{s['name']}: {l['label']}", hoverinfo="text",
+            marker=dict(size=22 if s_id == highlight else 16, color=l["color"], symbol="circle",
+                        line=dict(width=2, color="white")), name=f"{s['name']} {l['label']}", showlegend=False))
+
+
+def base_layout(fig, height=470, fit=True):
+    fig.update_layout(
+        geo=dict(projection_type="natural earth", showland=True, landcolor="#e2e8f0", showocean=True,
+                 oceancolor="#f1f7fd", showcountries=True, countrycolor="#cbd5e1", coastlinecolor="#94a3b8",
+                 showframe=False, bgcolor="rgba(0,0,0,0)", **({"fitbounds": "locations"} if fit else {})),
+        paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0), height=height,
+        legend=dict(orientation="h", yanchor="top", y=-0.02, x=0, font=dict(color="#475569", size=12)))
+    return fig
+
+
+def route_label(sids):
+    return " → ".join(STRAITS[s]["name"] for s in sids) or "감시 해협 없음"
+
+
+map_col, info_col = st.columns([2.3, 1])
+ok_ev = ev and not ev.get("error") and not ev.get("arrived")
+with map_col:
+    fig = go.Figure()
+    if ok_ev:
+        risky_ahead = any((s["level"] or 0) >= 1 for s in ev["straits"])
+        track = db.get_tracks(voyage["mmsi"], 200) if voyage.get("mmsi") else []
+        if len(track) >= 2:
+            fig.add_trace(go.Scattergeo(lat=[t["lat"] for t in track], lon=[t["lon"] for t in track], mode="lines",
+                                        line=dict(width=3, color="#94a3b8"), name="지나온 길(AIS)", hoverinfo="name"))
+        if risky_ahead:
+            for i, a in enumerate(ev["alternatives"][:2]):
+                fig.add_trace(go.Scattergeo(lat=[p[0] for p in a["points"]], lon=[p[1] for p in a["points"]],
+                                            mode="lines", line=dict(width=3, color=ALT_COLORS[i], dash="dash"),
+                                            name=f"대체 {i + 1}: {a['label']} ({a['delta_days']:+.1f}일)",
+                                            hoverinfo="name"))
+        pts = ev["route_points"]
+        fig.add_trace(go.Scattergeo(lat=[p[0] for p in pts], lon=[p[1] for p in pts], mode="lines",
+                                    line=dict(width=5, color=BLUE), name="남은 항로", hoverinfo="name"))
+        arrows(fig, pts, BLUE)
+        strait_markers(fig, [s["id"] for s in ev["straits"]], sid)
+        pos = ev.get("position")
+        if ev.get("estimated") and pos:
+            fig.add_trace(go.Scattergeo(lat=[pos["lat"]], lon=[pos["lon"]], mode="markers", hoverinfo="name",
+                                        marker=dict(size=11, color="white", line=dict(width=2, color="#0f172a")),
+                                        name=f"마지막 수신 위치 ({pos['seen_at'][5:16]})"))
+        here = pts[0]
+        fig.add_trace(go.Scattergeo(lat=[here[0]], lon=[here[1]], mode="markers+text", text=[voyage["ship_name"]],
+                                    textposition="bottom center", textfont=dict(color="#0f172a", size=13),
+                                    marker=dict(size=24, color="#0f172a", symbol="star", line=dict(width=2, color="white")),
+                                    name="현재 위치" + (" (추정)" if ev.get("estimated") else ""), hoverinfo="name"))
+        fig.add_trace(go.Scattergeo(lat=[here[0]], lon=[here[1]], mode="markers", hoverinfo="skip", showlegend=False,
+                                    marker=dict(symbol="triangle-up", size=16, color="#f59e0b", angle=ev["heading"],
+                                                angleref="up", line=dict(width=1, color="#0f172a"))))
+        base_layout(fig)
     else:
-        st.success("🟢 정상 운항 상태입니다.")
+        sample = SAMPLE_ROUTES.get(sid)
+        if sample:
+            r = find_route(*sample)
+            fig.add_trace(go.Scattergeo(lat=[p[0] for p in r["points"]], lon=[p[1] for p in r["points"]],
+                                        mode="lines", line=dict(width=4, color=BLUE),
+                                        name=f"대표 항로: {sample[0]} → {sample[1]}", hoverinfo="name"))
+            arrows(fig, [p[:2] for p in r["points"]], BLUE)
+        strait_markers(fig, list(STRAITS), sid)
+        base_layout(fig, fit=False)
+    st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
 
-    briefing = summarize_news_situation(news_items, selected_route_key) if news_items else None
-    if briefing:
+with info_col:
+    if voyage and ev and ev.get("error"):
+        st.error(f"계산 실패: {ev['error']}")
+    elif voyage and ev and ev.get("arrived"):
+        st.success(f"✓ {voyage['ship_name']}이(가) 도착항 근처에 있습니다. 사이드바에서 '운항 종료'를 누르세요.")
+    elif ok_ev:
+        pos = ev.get("position")
+        if ev["source"] == "ais":
+            where = f"AIS 수신 {pos['age_h']:g}시간 전"
+        elif ev["source"] == "estimated":
+            where = f"마지막 수신 {pos['age_h']:g}시간 전 → 속력으로 추정"
+        else:
+            where = ("AIS 위치가 오래돼 출발항 기준" if pos else "AIS 기록 없음 — 출발항 기준")
+        straits_html = "".join(f"<div class='row'><span>{s['name']}</span>{pill(s['level'])}</div>"
+                               for s in ev["straits"]) or "<div class='muted'>앞으로 지날 감시 해협 없음</div>"
         st.markdown(f"""
-<div class="info-card" style='color:#334155; line-height:1.9; margin-top:14px;'>
-<b style='color:#0f172a; font-size:1.05rem;'>📋 뉴스 종합 요약</b><br>
-최근 수집된 <b style='color:#d97706;'>{briefing['article_count']}건</b>의 관련 기사
-(출처 <b style='color:#d97706;'>{briefing['source_count']}곳</b>)를 종합한 결과,
-현재 이 항로에서는 <b style='color:#d97706;'>{briefing['issue_text']}</b> 관련 이슈가 주로 보도되고 있습니다.<br>
-대표 헤드라인: <i>"{briefing['headline']}"</i>
+<div class="card"><h4>🚢 {voyage['ship_name']}</h4>
+  <div class="muted">{voyage['origin']} → {voyage['dest']}</div>
+  <div class="row"><span>남은 거리</span><b>약 {ev['distance_nm']:,}해리</b></div>
+  <div class="row"><span>도착 예상</span><b>{ev['eta']} (약 {ev['days']}일)</b></div>
+  <div class="row"><span>위치 기준</span><b>{where}</b></div>
+  <div class="row"><span>진행 방향</span><b>{ev['heading']}°</b></div>
 </div>
-""", unsafe_allow_html=True)
-
-with col_news:
-    st.subheader("관련 뉴스")
-    if news_items is None:
-        st.caption("NewsAPI 키 미설정")
-    elif not news_items:
-        st.caption("관련 뉴스를 가져오지 못했습니다.")
-    else:
-        for n in news_items:
+<div class="card"><h4>앞으로 지날 해협</h4>{straits_html}</div>""", unsafe_allow_html=True)
+        risky = [s for s in ev["straits"] if (s["level"] or 0) >= 1]
+        if risky and ev["alternatives"]:
+            best = ev["alternatives"][0]
             st.markdown(f"""
-<div class="news-card">
-<a href="{n['link']}" target="_blank" style="color:#0f172a; font-weight:700; font-size:0.95rem;">{n['title']}</a>
-<div style="color:#64748b; font-size:0.82rem; margin-top:4px;">📰 {n['source']} · {(n['desc'] or '')[:80]}...</div>
-</div>
-""", unsafe_allow_html=True)
+<div class="card" style="border-color:#fdba74;"><h4>🧭 대체 항로 추천</h4>
+  <div class="big">{best['label']}</div>
+  <div class="muted">약 {best['distance_nm']:,}해리 · {best['days']}일 (<b>{best['delta_days']:+.1f}일</b>)<br>
+  지나는 해협: {", ".join(f"{s['name']} {LEVELS[s['level']]['label']}" for s in best['straits']) or '감시 해협 없음'}<br>
+  이유: {risky[0]['name']} {LEVELS[risky[0]['level']]['label']} — {risky[0]['reason']}</div>
+</div>""", unsafe_allow_html=True)
+        elif risky:
+            st.warning("위험 해협을 피하는 대체 항로를 항로망에서 찾지 못했습니다.")
+        else:
+            st.markdown("<div class='card'><h4>✓ 현재 항로 유지</h4><div class='muted'>앞으로 지날 해협이 모두 "
+                        "정상입니다.</div></div>", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+<div class="card"><h4>🚢 선박을 등록해 보세요</h4>
+  <div class="muted">사이드바에서 선박명 또는 MMSI와 출발·도착항을 넣으면<br>
+  · 현재 위치와 진행 방향, 남은 항로<br>· 앞으로 지날 해협의 신호등<br>· 위험할 때 대체 항로와 경보 메일<br>
+  을 자동으로 보여 드립니다.</div></div>""", unsafe_allow_html=True)
+        sample = SAMPLE_ROUTES.get(sid)
+        if sample and (e["level"] or 0) >= 1:
+            alt = find_route(*sample, banned_straits=[sid])
+            base_r = find_route(*sample)
+            if alt:
+                st.markdown(f"""
+<div class="card" style="border-color:#fdba74;"><h4>🧭 대표 항로 기준 대체 항로</h4>
+  <div class="muted">{sample[0]} → {sample[1]} ({route_label(base_r['straits'])})</div>
+  <div class="big">{voyages._alt_label(alt)}</div>
+  <div class="muted">{alt['distance_nm']:,}해리 (현재 항로 {base_r['distance_nm']:,}해리,
+  {alt['distance_nm'] - base_r['distance_nm']:+,}해리)</div></div>""", unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 리스크 점수 추이 (30일)
+# ③ 관련 뉴스 (원래 기능 유지)
 # -------------------------------------------------------------
-st.divider()
-st.subheader("📈 리스크 점수 추이 (최근 30일)")
-
-np.random.seed(hash(selected_route_key) % 1000)
-trend_base = sel_rule
-trend_values = np.clip(trend_base + np.cumsum(np.random.randn(30) * 4), 0, 100)
-
-fig_trend = go.Figure()
-fig_trend.add_trace(go.Scatter(
-    y=trend_values, mode="lines",
-    line=dict(color="#2563eb", width=2.5),
-    fill="tozeroy", fillcolor="rgba(37, 99, 235, 0.10)",
-    name="리스크 점수"
-))
-fig_trend.update_layout(
-    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color="#64748b"),
-    height=220, margin=dict(l=10, r=10, t=10, b=10),
-    xaxis=dict(showgrid=False, title="일 전"),
-    yaxis=dict(showgrid=True, gridcolor="#e2e8f0", title="점수"),
-    showlegend=False
-)
-st.plotly_chart(fig_trend, use_container_width=True)
+st.markdown(f"### 📰 관련 뉴스 · {cur['name']}")
+news = fetch_news(cur["news_keyword"])
+if news is None:
+    st.caption("NewsAPI 키가 설정되지 않았습니다.")
+elif isinstance(news, dict):
+    st.caption(f"뉴스를 가져오지 못했습니다: {news['error']}")
+elif not news:
+    st.caption("관련 뉴스가 없습니다.")
+else:
+    b = summarize_news(news)
+    st.markdown(f"""<div class="card"><div class="muted">최근 기사 <b>{b['count']}건</b> (출처 {b['sources']}곳) 종합:
+        주로 <b style='color:#d97706'>{b['issues']}</b> 관련 보도</div></div>""", unsafe_allow_html=True)
+    ncols = st.columns(2)
+    for i, n in enumerate(news):
+        ncols[i % 2].markdown(f"""
+<div class="news-card"><a href="{n['link']}" target="_blank" style="color:#0f172a;font-size:0.95rem;">{n['title']}</a>
+<div style="color:#64748b;font-size:0.8rem;margin-top:4px;">📰 {n['source']} · {n['date']} · {(n['desc'] or '')[:90]}…</div>
+</div>""", unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 대체 루트 (경보시만)
+# ④ 판단 근거 · 기록 · 대체 항로 비교
 # -------------------------------------------------------------
-if ALERT_TRIGGERED:
-    st.divider()
-    st.subheader("대체 루트 추천")
-    for idx, r in enumerate(scored_alternatives):
-        badge = "🟢" if idx == 0 else "🔵"
-        with st.container():
-            st.markdown(f"### {badge} {idx+1}순위: {r['route_name']}")
-            c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("점수", f"{r['total_score']}")
-            c2.metric("소요시간", f"{r['transit_time_days']}일")
-            c3.metric("운임지수", f"{r['cost_index_pct']}%")
-            c4.metric("보험료", r["war_risk_insurance"])
-            c5.metric(f"통행({ship_nationality})", r["passage_status"])
-            st.info(r["recommendation_reason"])
+st.markdown(f"### 🔎 왜 이 색인가 · {cur['name']}")
+L = e.get("layers", {})
+c1, c2, c3, c4 = st.columns(4)
 
-            risk_tag, badge_bg, badge_text = ("🟢 Low", "#dcfce7", "#15803d") if r["total_score"] >= 70 else \
-                (("🟡 Medium", "#fef3c7", "#b45309") if r["total_score"] >= 40 else ("🔴 High", "#fee2e2", "#b91c1c"))
-            st.markdown(
-                f"<span class='risk-badge' style='background:{badge_bg};color:{badge_text};'>{risk_tag} Risk</span>",
-                unsafe_allow_html=True
-            )
 
-    if send_alert_btn:
-        st.sidebar.success(f"📧 발송됨: {alert_email}")
+def card(col, title, body):
+    col.markdown(f"<div class='card' style='min-height:190px'><h4>{title}</h4>{body}</div>", unsafe_allow_html=True)
+
+
+off = L.get("official")
+if off is None:
+    card(c1, "① 공식 판단", "<div class='muted'>꺼짐</div>")
+else:
+    def official_row(it):
+        stale = " · <b>갱신 필요</b>" if it["stale"] else ""
+        link = f" · <a href='{it['url']}' target='_blank'>출처</a>" if it.get("url") else ""
+        note = " · 판단에는 쓰지 않음(지정 유지)" if it.get("context") else ""
+        return (f"<div class='row'><span>{it['name']}</span><span>{it['value']}{stale}</span></div>"
+                f"<div class='muted'>{it['date'] or ''}{link}{note}</div>")
+    rows = "".join(official_row(it) for it in off["items"]) or "<div class='muted'>현재 등록된 공식 경보 없음</div>"
+    card(c1, "① 공식 판단", rows + "<div class='muted' style='margin-top:6px'>미국 MSCI · JMIC/UKMTO · Lloyd's JWC "
+                                   "(official_status.toml 에서 직접 관리)</div>")
+
+nw = L.get("news")
+if nw is None:
+    card(c2, "② 뉴스 사건", "<div class='muted'>꺼짐</div>")
+elif not nw["available"]:
+    card(c2, "② 뉴스 사건", f"<div class='muted'>{nw['note']}</div>")
+else:
+    card(c2, "② 뉴스 사건", f"""<div class='big'>{nw['events']:g}건 <span class='muted'>/ 최근 24시간</span></div>
+      <div class='row'><span>평소(중앙값)</span><b>{nw['median']:g}건</b></div>
+      <div class='row'><span>평소 대비</span><b>{nw['ratio'] if nw['ratio'] is not None else '-'}배</b></div>
+      <div class='row'><span>최근 {nw['baseline_days']}일 중</span><b>상위 {nw['top_rank_pct']:g}%</b></div>
+      <div class='row'><span>이상 신호 연속</span><b>{nw['streak']}일</b></div>
+      <div class='muted'>GDELT: 해협 {cur['radius_km']}km 안의 위협·공격·봉쇄 사건</div>""")
+
+tr = L.get("traffic")
+if tr is None:
+    card(c3, "③ 실제 통항량", "<div class='muted'>꺼짐</div>")
+elif not tr.get("available") and "recent_avg" not in tr:
+    card(c3, "③ 실제 통항량", f"<div class='muted'>{tr.get('note', '데이터 없음')}</div>")
+else:
+    card(c3, "③ 실제 통항량", f"""<div class='big'>{tr['change_pct']:+.0f}% <span class='muted'>작년 같은 시기 대비</span></div>
+      <div class='row'><span>최근 7일 하루 평균</span><b>{tr['recent_avg']:g}척</b></div>
+      <div class='row'><span>작년 같은 7일</span><b>{tr['base_avg']:g}척</b></div>
+      <div class='muted'>{tr.get('note', '')} {tr['latest_date']}까지 (주 1회 갱신) ·
+      <a href='https://portwatch.imf.org' target='_blank'>IMF PortWatch</a></div>""")
+
+ds = L.get("disaster")
+if ds is None:
+    card(c4, "④ 운항 불가 재해", "<div class='muted'>꺼짐</div>")
+elif not ds["available"]:
+    card(c4, "④ 운항 불가 재해", "<div class='muted'>재해 경보를 가져오지 못했습니다</div>")
+else:
+    body = "".join(f"<div class='row'><span>{h['name']}</span>{pill(2 if h['alert'] == 'Red' else 1, h['alert'])}</div>"
+                   f"<div class='muted'>해협에서 {h['km']}km</div>" for h in ds["hits"])
+    card(c4, "④ 운항 불가 재해", (body or "<div class='muted'>해협 근처 태풍·쓰나미 경보 없음</div>") +
+         "<div class='muted' style='margin-top:6px'>GDACS (EU·UN 재난경보) Orange·Red만 반영. "
+         "일반 파도·바람은 보지 않음</div>")
+
+g1, g2 = st.columns(2)
+with g1:
+    st.markdown("##### 뉴스 사건 수 (하루 단위, 최근 30일)")
+    raw = (statuses[sid] or {}).get("data", {}).get("raw", {})
+    w = list(reversed((raw.get("news_windows") or [])[:30]))
+    if any(x is not None for x in w):
+        f2 = go.Figure(go.Bar(x=[f"-{len(w) - 1 - i}일" for i in range(len(w))], y=w, marker_color="#93c5fd",
+                              name="갈등 사건 수"))
+        if nw and nw.get("available"):
+            f2.add_hline(y=nw["threshold"], line=dict(color="#f59e0b", dash="dash"),
+                         annotation_text=f"이상 신호 기준 {nw['threshold']:g}건", annotation_position="top left")
+        f2.update_layout(height=230, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
+                         plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="#e2e8f0"), showlegend=False)
+        st.plotly_chart(f2, width="stretch", config={"displaylogo": False})
+    else:
+        st.caption("수집된 기록이 아직 없습니다.")
+with g2:
+    st.markdown("##### 하루 통항 척수 (최근 120일 · 작년 같은 시기)")
+    series = load_traffic(cur["portwatch"])
+    if series:
+        by = dict(series)
+        recent = series[-120:]
+        last_year = [by.get((date.fromisoformat(d) - timedelta(days=364)).isoformat()) for d, _ in recent]
+        f3 = go.Figure()
+        f3.add_trace(go.Scatter(x=[d for d, _ in recent], y=last_year, mode="lines", name="작년 같은 시기",
+                                line=dict(color="#cbd5e1", width=2)))
+        f3.add_trace(go.Scatter(x=[d for d, _ in recent], y=[n for _, n in recent], mode="lines", name="올해",
+                                line=dict(color=BLUE, width=2.5)))
+        f3.update_layout(height=230, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
+                         plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(gridcolor="#e2e8f0"),
+                         legend=dict(orientation="h", y=1.1, x=0))
+        st.plotly_chart(f3, width="stretch", config={"displaylogo": False})
+    else:
+        st.caption("통항 데이터가 아직 없습니다.")
+
+hist = load_history(sid)
+if hist:
+    st.markdown("##### 신호등 기록 (최근 30일, 기본 기준)")
+    f4 = go.Figure(go.Scatter(x=[h["computed_at"] for h in hist], y=[h["level"] for h in hist], mode="lines",
+                              line=dict(shape="hv", color="#0f172a", width=2)))
+    f4.update_layout(height=170, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)",
+                     plot_bgcolor="rgba(0,0,0,0)",
+                     yaxis=dict(tickvals=[0, 1, 2], ticktext=["정상", "주의", "심각"], range=[-0.3, 2.3],
+                                gridcolor="#e2e8f0"))
+    st.plotly_chart(f4, width="stretch", config={"displaylogo": False})
+
+if ok_ev and ev["alternatives"]:
+    st.markdown("##### 대체 항로 비교")
+    rows = [{"항로": "현재 항로", "거리(해리)": f"{ev['distance_nm']:,}", "남은 일수": ev["days"], "차이": "기준",
+             "지나는 해협": ", ".join(f"{LEVELS[s['level']]['icon']} {s['name']}" for s in ev["straits"]) or "없음"}]
+    rows += [{"항로": a["label"], "거리(해리)": f"{a['distance_nm']:,}", "남은 일수": a["days"],
+              "차이": f"{a['delta_days']:+.1f}일",
+              "지나는 해협": ", ".join(f"{LEVELS[s['level']]['icon']} {s['name']}" for s in a["straits"]) or "없음"}
+             for a in ev["alternatives"]]
+    st.dataframe(rows, hide_index=True, width="stretch")
+    st.caption("거리는 주요 항로를 단순화한 항로망 기준 근사값, 일수 = 거리 ÷ (평균 속력 × 24). 운하 통항료·보험료는 포함하지 않습니다.")
+
+st.caption("이 도구는 위험을 맞힌다는 보장이 아니라, 평소와 다른 움직임을 먼저 알려 주는 조기 경보입니다. "
+           "사전 정보가 없는 단발성 사건은 미리 잡을 수 없습니다.")

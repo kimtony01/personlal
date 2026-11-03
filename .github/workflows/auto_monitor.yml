@@ -1,50 +1,38 @@
-name: 해상 항로 자동 수집 및 리스크 경보
+name: 해상 항로 조기경보 (수집·판단·경보)
 
 on:
   schedule:
-    # UTC 기준 30분마다 실행 (한국시간 기준도 동일 주기, 시:분만 다름)
+    # 30분마다 (GitHub 사정에 따라 몇 분~수십 분 늦게 시작될 수 있음)
     - cron: "*/30 * * * *"
-  workflow_dispatch: {}   # Actions 탭에서 수동 실행 버튼도 사용 가능
+  workflow_dispatch: {}   # Actions 탭에서 수동 실행 버튼
 
-permissions:
-  contents: write
+# 이전 실행이 끝나기 전에 다음 실행이 겹치지 않게 (메일 중복 방지)
+concurrency:
+  group: monitor
+  cancel-in-progress: false
 
 jobs:
-  collect-and-alert:
+  monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: 저장소 체크아웃
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 파이썬 설치
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-monitor.txt
 
-      - name: 의존성 설치
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements-monitor.txt
 
-      - name: 실시간 AIS 선박 데이터 수집 (collector.py)
+      # 결과는 DB(Neon)에 저장 — 저장소에 커밋하지 않음
+      - name: 수집 → 해협 신호등 판단 → 운항 감시 → 경보 메일
+        run: python monitor.py
         env:
+          TZ: Asia/Seoul
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AISSTREAM_API_KEY: ${{ secrets.AISSTREAM_API_KEY }}
-        run: python collector.py
-
-      - name: 리스크 점검 및 이메일 경보 (risk_check_and_alert.py)
-        env:
-          NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
-        run: python risk_check_and_alert.py
-
-      - name: 수집 결과 자동 커밋 & 푸시
-        run: |
-          git config user.name "auto-monitor-bot"
-          git config user.email "actions@github.com"
-          git add ship_data.json ship_history.json
-          git diff --quiet --cached || git commit -m "자동 수집: 선박 위치 업데이트 ($(date -u +'%Y-%m-%d %H:%M UTC'))"
-          for i in 1 2 3 4 5; do
-            git pull --rebase origin main && git push && break
-            echo "푸시 충돌 발생, 재시도 ($i/5)..."
-            sleep 5
-          done
+          SMTP_USER: ${{ secrets.GMAIL_ADDRESS }}
+          SMTP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          ALERT_RECIPIENTS: ${{ secrets.ALERT_EMAIL }}
