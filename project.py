@@ -134,8 +134,10 @@ st.markdown("""
     .alt-card h5 { margin: 0 0 6px; color: #0f172a; font-size: 0.95rem; }
     .alt-card .big { color: #0f172a; font-weight: 800; font-size: 1.4rem; }
     .alt-card .muted { color: #64748b; font-size: 0.8rem; line-height: 1.5; }
-    .pipe { background: #f8fafc; border-left: 3px solid #fb923c; border-radius: 6px; padding: 8px 10px; margin-top: 8px;
-        font-size: 0.8rem; color: #475569; }
+    .pipe { background: #fdf8f3; border-left: 3px solid #92400e; border-radius: 6px; padding: 8px 10px; margin-top: 10px;
+        font-size: 0.8rem; color: #475569; line-height: 1.55; }
+    .pipe .pn { color: #92400e; font-weight: 700; }
+    .card, .sum-card, .alt-card, .tile, .pipe, .banner, .sig-card { word-break: keep-all; overflow-wrap: break-word; }
     .news-item { padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
     .news-item:last-child { border-bottom: none; }
     .news-item a { color: #0f172a !important; font-size: 0.93rem; }
@@ -452,7 +454,7 @@ def unwrap_lons(lons):
     return out
 
 
-def view_bounds(lines, pad=0.12, aspect=2.4):
+def view_bounds(lines, pad=0.2, aspect=2.4):
     """보여 줄 범위: (중심 경도, 경도 범위, 위도 범위). lines = 선마다 [(lat, lon), ...]
 
     날짜변경선을 넘는 항로도 한 덩어리로 이어 계산. 지구 반 바퀴를 넘으면 세계 지도(범위 None)
@@ -495,7 +497,7 @@ def ship_shape(lat, lon, heading, lines):
     return out_lat, out_lon
 
 
-def base_layout(fig, height=470, lines=None):
+def base_layout(fig, height=520, lines=None):
     """lines 를 주면 그 범위로 확대 (fitbounds 는 날짜변경선을 넘는 항로에서 지도를 반으로 갈라서 직접 계산)"""
     view = {}
     if lines:
@@ -510,8 +512,8 @@ def base_layout(fig, height=470, lines=None):
                  showcoastlines=True, coastlinecolor="#64748b", coastlinewidth=0.7,
                  showframe=False, bgcolor="rgba(0,0,0,0)", **view),
         paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0), height=height,
-        legend=dict(orientation="v", yanchor="top", y=0.99, x=0.01, font=dict(color="#334155", size=11),
-                    bgcolor="rgba(255,255,255,0.85)", bordercolor="#e2e8f0", borderwidth=1))
+        legend=dict(orientation="h", yanchor="top", y=-0.01, x=0, font=dict(color="#334155", size=11),
+                    bgcolor="rgba(0,0,0,0)"))
     return fig
 
 
@@ -525,30 +527,81 @@ with map_col:
     fig = go.Figure()
     if ok_ev:
         risky_ahead = any((s["level"] or 0) >= 1 for s in ev["straits"])
+        alts = ev["alternatives"][:2] if risky_ahead else []
         track = voyage.get("track") or (db.get_tracks(voyage["mmsi"], 200) if voyage.get("mmsi") else [])
+        pts = ev["route_points"]
+        BROWN = "#92400e"
+        # 보이는 범위: 남은 항로·대체안·파이프라인 + 지나온 길의 마지막 구간만 (지도가 너무 멀어지지 않게)
+        lines = [[tuple(p[:2]) for p in pts]]
+        if len(track) >= 2:
+            lines.append([(t["lat"], t["lon"]) for t in track[-2:]])
+        for a in alts:
+            lines.append([tuple(p[:2]) for p in a["points"]])
+            if a.get("land_points"):
+                lines.append([tuple(x) for x in a["land_points"]])
+        view_center, lon_rng, lat_rng = view_bounds(lines)
+        off = 0.025 * ((lat_rng[1] - lat_rng[0]) if lat_rng else 120)   # 표시 지점과 글자 사이 간격(도)
+
+        def text_at(lat, lon, text, color="#0f172a", pos="top center", size=12, dlat=0.0, dlon=0.0):
+            lat, lon = lat + dlat, lon + dlon
+            fig.add_trace(go.Scattergeo(lat=[lat], lon=[lon], mode="text", text=[text], textposition=pos,
+                                        textfont=dict(color=color, size=size, family="sans-serif"),
+                                        hoverinfo="skip", showlegend=False))
+
+        # 1) 지나온 길 (흐리게)
         if len(track) >= 2:
             fig.add_trace(go.Scattergeo(lat=[t["lat"] for t in track], lon=[t["lon"] for t in track], mode="lines",
-                                        line=dict(width=3, color="#94a3b8"), name="지나온 길" + ("(예시)" if voyage.get("demo") else "(AIS)"), hoverinfo="name"))
-        if risky_ahead:
-            for i, a in enumerate(ev["alternatives"][:2]):
-                fig.add_trace(go.Scattergeo(lat=[p[0] for p in a["points"]], lon=[p[1] for p in a["points"]],
-                                            mode="lines", line=dict(width=3, color=ALT_COLORS[i], dash="dash"),
-                                            name=f"대체 {i + 1}: {a['label'].replace('항구 변경: ', '')} ({a['delta_days']:+.1f}일)",
-                                            hoverinfo="name"))
-                if a.get("land_points"):
-                    lp = a["land_points"]
-                    fig.add_trace(go.Scattergeo(
-                        lat=[x[0] for x in lp], lon=[x[1] for x in lp], mode="lines+markers",
-                        line=dict(width=6, color=ALT_COLORS[i], dash="dot"),
-                        marker=dict(size=[11] + [0] * (len(lp) - 2) + [11], symbol="square", color=ALT_COLORS[i],
-                                    line=dict(width=1.5, color="white")),
-                        name="  └ 육상 원유 파이프라인",
-                        hovertext=f"{a['pipeline']} · {a['capacity']}", hoverinfo="text"))
-        pts = ev["route_points"]
+                                        line=dict(width=2.5, color="#94a3b8"),
+                                        name="지나온 길" + ("(예시)" if voyage.get("demo") else "(AIS)"), hoverinfo="name"))
+        # 2) 현재 계획 항로 (파란 실선)
         fig.add_trace(go.Scattergeo(lat=[p[0] for p in pts], lon=[p[1] for p in pts], mode="lines",
-                                    line=dict(width=5, color=BLUE), name="남은 항로", hoverinfo="name"))
+                                    line=dict(width=5, color=BLUE), name="현재 계획 항로", hoverinfo="name"))
         arrows(fig, pts, BLUE)
-        strait_markers(fig, [s["id"] for s in ev["straits"]], sid)
+        # 3) 대체안 바닷길 (점선) + 대체 항구 ★ / 우회 항로 이름
+        for i, a in enumerate(alts):
+            c, short = ALT_COLORS[i], a["label"].replace("항구 변경: ", "")
+            fig.add_trace(go.Scattergeo(lat=[p[0] for p in a["points"]], lon=[p[1] for p in a["points"]],
+                                        mode="lines", line=dict(width=4, color=c, dash="dash"),
+                                        name=f"대체 {i + 1}: {short} ({a['delta_days']:+.1f}일)", hoverinfo="name"))
+            end = a["points"][-1]
+            if a.get("kind") == "port":
+                fig.add_trace(go.Scattergeo(lat=[end[0]], lon=[end[1]], mode="markers", hoverinfo="skip",
+                                            showlegend=False, marker=dict(size=18, symbol="star", color=c,
+                                                                          line=dict(width=1.5, color="white"))))
+                # 지도 가장자리 쪽으로 글자를 붙여 다른 표시와 겹치지 않게
+                west = ((end[1] - view_center + 180) % 360 - 180) < 0
+                text_at(end[0], end[1], f"★ 대체 {i + 1} · {short}", c, "middle left" if west else "middle right", 12,
+                        dlon=-off * 1.2 if west else off * 1.2)
+            else:
+                mid = a["points"][len(a["points"]) // 2]
+                text_at(mid[0], mid[1], f"대체 {i + 1} · {short}", c, "middle left", 12, dlon=-off)
+            # 4) 육상 파이프라인 (갈색 실선 + 양 끝 시설 ●)
+            if a.get("land_points"):
+                lp = a["land_points"]
+                fig.add_trace(go.Scattergeo(
+                    lat=[x[0] for x in lp], lon=[x[1] for x in lp], mode="lines+markers",
+                    line=dict(width=5, color=BROWN), marker=dict(size=[10] + [0] * (len(lp) - 2) + [10],
+                                                                 color=BROWN, line=dict(width=1.5, color="white")),
+                    name=f"육상 파이프라인 ({a['pipe_short']})", hovertext=f"{a['pipeline']} · {a['capacity']}",
+                    hoverinfo="text"))
+                k = max(len(lp) // 2 - 1, 0)   # 선의 가운데 (양 끝 항구 글자와 겹치지 않게)
+                m = ((lp[k][0] + lp[k + 1][0]) / 2, (lp[k][1] + lp[k + 1][1]) / 2)
+                text_at(m[0], m[1], f"{a['pipe_short']} (육상)", BROWN, "bottom center", 11, dlat=-off * 0.6)
+        # 5) 원래 도착항 (파란 네모)
+        d = PORT_DB[voyage["dest"]]
+        fig.add_trace(go.Scattergeo(lat=[d["lat"]], lon=[d["lon"]], mode="markers", hoverinfo="skip", showlegend=False,
+                                    marker=dict(size=12, symbol="square", color=BLUE, line=dict(width=1.5, color="white"))))
+        text_at(d["lat"], d["lon"], f"■ {voyage['dest']} (도착 예정)", BLUE, "middle left", 12, dlon=-off)
+        # 6) 앞으로 지날 해협: 위험하면 크게 + '⚠ 이름 · 등급'
+        for s in ev["straits"]:
+            z, l = STRAITS[s["id"]], LEVELS[s["level"]]
+            risky = (s["level"] or 0) >= 1
+            fig.add_trace(go.Scattergeo(lat=[z["lat"]], lon=[z["lon"]], mode="markers", hoverinfo="text",
+                                        hovertext=f"{z['name']}: {l['label']} — {s['reason']}", showlegend=False,
+                                        marker=dict(size=26 if risky else 14, color=l["color"], opacity=0.9,
+                                                    line=dict(width=2, color="white"))))
+            text_at(z["lat"], z["lon"], (f"⚠ {z['name']} · {l['label']}" if risky else z["name"]),
+                    l["color"] if risky else "#334155", "top center", 13 if risky else 11, dlat=off * 1.3)
         pos = ev.get("position")
         if ev.get("estimated") and pos:
             fig.add_trace(go.Scattergeo(lat=[pos["lat"]], lon=[pos["lon"]], mode="markers", hoverinfo="name",
@@ -559,23 +612,13 @@ with map_col:
         label = {"ais": "현재 위치(AIS)", "estimated": "현재 위치(추정)", "origin": "출발항 기준(위치 미수신)"}[ev["source"]]
         if voyage.get("demo"):
             label = "현재 위치(예시)"
-        lines = [[tuple(p[:2]) for p in pts]]
-        if len(track) >= 2:
-            lines.append([(t["lat"], t["lon"]) for t in track])
-        for a in (ev["alternatives"][:2] if risky_ahead else []):
-            lines.append([tuple(p[:2]) for p in a["points"]])
-            if a.get("land_points"):
-                lines.append([tuple(x) for x in a["land_points"]])
         hull_lat, hull_lon = ship_shape(here[0], here[1], ev["heading"], lines)
-        # 실제 위치 = 진한 배, 위치를 아직 못 받음(출발항 기준) = 흰 배에 진한 테두리
+        # 7) 배: 실제 위치 = 진한 배, 위치를 아직 못 받음(출발항 기준) = 흰 배에 진한 테두리
         fig.add_trace(go.Scattergeo(lat=hull_lat, lon=hull_lon, mode="lines", fill="toself",
                                     fillcolor="#0f172a" if live else "#ffffff",
                                     line=dict(width=1.5 if live else 2.5, color="#ffffff" if live else "#0f172a"),
                                     name=label, hoverinfo="name"))
-        label_lat = max(hull_lat) + (max(hull_lat) - min(hull_lat)) * 0.6   # 배와 겹치지 않게 위로 띄움
-        fig.add_trace(go.Scattergeo(lat=[label_lat], lon=[here[1]], mode="text", text=[voyage["ship_name"]],
-                                    textposition="top center", textfont=dict(color="#0f172a", size=12),
-                                    hoverinfo="skip", showlegend=False))
+        text_at(min(hull_lat), here[1], voyage["ship_name"], "#0f172a", "bottom center", 12, dlat=-off * 0.5)
         base_layout(fig, lines=lines)
     else:
         sample = SAMPLE_ROUTES.get(sid)
@@ -666,8 +709,9 @@ if ok_ev and ev["alternatives"] and any((s["level"] or 0) >= 1 for s in ev["stra
   <div style="margin-top:8px">{strait_pills(ev['straits'])}</div></div>""", unsafe_allow_html=True)
     for i, (col, a) in enumerate(zip(cols[1:], alts)):
         color = "#16a34a" if a["delta_days"] <= 0 else "#b45309"
-        pipe = (f"<div class='pipe'>🛢 <b>{a['pipeline']}</b> · {a['capacity']}<br>{a['note']}"
-                f" · <a href='{a['source']}' target='_blank'>출처(EIA)</a></div>") if a.get("pipeline") else ""
+        pipe = (f"<div class='pipe'><div class='pn'>🛢 {a['pipeline']}</div><div>용량 <b>{a['capacity']}</b></div>"
+                f"<div>{a['note']}</div><a href='{a['source']}' target='_blank'>출처: 미국 에너지정보청(EIA)</a></div>"
+                ) if a.get("pipeline") else ""
         cols[i + 1].markdown(f"""<div class="alt-card {'best' if i == 0 else ''}">
   <h5>{'⭐ ' if i == 0 else ''}{a['label']}</h5>
   <div class="big" style="color:{color}">{a['delta_days']:+.1f}일</div>

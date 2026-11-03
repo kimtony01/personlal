@@ -19,12 +19,12 @@ ARRIVAL_NM = 30
 EIA_SRC = "https://www.eia.gov/todayinenergy/detail.php?id=65504"
 DEST_CHANGE = {
     "hormuz": [
-        {"port": "푸자이라항", "pipeline": "UAE 하브샨–푸자이라 원유 파이프라인", "capacity": "하루 180만 배럴",
+        {"port": "푸자이라항", "pipeline": "UAE 하브샨–푸자이라 원유 파이프라인", "short": "UAE 파이프라인", "capacity": "하루 180만 배럴",
          "land": [(23.85, 53.62), (24.25, 55.3), (25.12, 56.33)],
          "note": "UAE 육상 유전(하브샨) → 호르무즈 밖 오만만 푸자이라 터미널. UAE 원유(머반)용이라 "
                  "사우디 원유를 옮기는 것이 아니라 UAE 원유로 대체 구매하는 안",
          "source": EIA_SRC},
-        {"port": "얀부항", "pipeline": "사우디 동서(East-West) 원유 파이프라인", "capacity": "하루 500만 배럴 (2019년 일시 700만)",
+        {"port": "얀부항", "pipeline": "사우디 동서(East-West) 원유 파이프라인", "short": "사우디 동서 파이프라인", "capacity": "하루 500만 배럴 (2019년 일시 700만)",
          "land": [(25.94, 49.68), (25.2, 46.6), (24.6, 42.5), (24.09, 38.06)],
          "note": "아브카이크(동부 처리시설) → 홍해 얀부. 호르무즈는 피하지만 홍해·바브엘만데브를 지남. "
                  "2026년 공격으로 중단됐다가 9월 22일부터 일부 재개 (EIA 단기전망 2026-10)",
@@ -169,7 +169,8 @@ def evaluate(v, levels=None, max_age_h=72, max_detour=2.0):
                     alt_days = r["distance_nm"] / (v["speed_kn"] * 24)
                     alternatives.append({
                         "label": f"항구 변경: {dc['port']}", "kind": "port", "note": dc["note"],
-                        "pipeline": dc["pipeline"], "capacity": dc["capacity"], "source": dc["source"],
+                        "pipeline": dc["pipeline"], "pipe_short": dc["short"], "capacity": dc["capacity"],
+                        "source": dc["source"],
                         "land_points": [list(x) for x in dc["land"]], "points": [list(p[:2]) for p in r["points"]],
                         "distance_nm": r["distance_nm"], "days": round(alt_days, 1),
                         "delta_days": round(alt_days - days, 1), "straits": alt_straits,
