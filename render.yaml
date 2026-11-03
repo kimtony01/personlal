@@ -9,12 +9,14 @@ services:
     buildCommand: pip install -r requirements.txt
     # 워커는 반드시 1개: 워커마다 스케줄러가 떠서 수집·메일이 중복되는 것을 막음
     startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 180 --bind 0.0.0.0:$PORT
-    healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.8
       - key: TZ
         value: Asia/Seoul
+      # 무료 인스턴스(CPU 0.1)에서 전 세계 AIS 수신은 CPU 를 다 써서 페이지가 멈추므로 해협 구역만
+      - key: AIS_SCOPE
+        value: straits
       - key: DATABASE_URL
         sync: false
       - key: NEWSAPI_KEY

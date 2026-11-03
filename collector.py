@@ -10,15 +10,15 @@ from settings import AISSTREAM_API_KEY as API_KEY, SHIP_DATA_PATH, SHIP_HISTORY_
 BOUNDING_BOX = [[-90, -180], [90, 180]]
 
 
-async def _stream(seconds, mmsis=None):
+async def _stream(seconds, mmsis=None, boxes=None):
     """AISStream 을 seconds 초 동안 구독해서 {mmsi: {name, destination, lat, lon, speed}} 반환.
-    mmsis 를 주면 그 선박들만 구독 (FiltersShipMMSI, 최대 200척)"""
+    mmsis 를 주면 그 선박들만 구독 (FiltersShipMMSI, 최대 200척). boxes 를 주면 그 구역만 (기본 전 세계)"""
     ships_data = {}
 
     async with websockets.connect("wss://stream.aisstream.io/v0/stream") as websocket:
         subscribe_message = {
             "APIKey": API_KEY,
-            "BoundingBoxes": [BOUNDING_BOX],
+            "BoundingBoxes": boxes or [BOUNDING_BOX],
             "FilterMessageTypes": ["PositionReport", "ShipStaticData"]
         }
         if mmsis:
@@ -91,9 +91,9 @@ def _save(name, path, obj):
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 
-async def collect_and_save(seconds=120):
-    """전 세계 선박 표본 수집 → ship_data.json(스냅샷) 교체 + ship_history.json 누적"""
-    ships_data = await _stream(seconds)
+async def collect_and_save(seconds=120, boxes=None):
+    """선박 표본 수집(기본 전 세계) → ship_data.json(스냅샷) 교체 + ship_history.json 누적"""
+    ships_data = await _stream(seconds, boxes=boxes)
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     history = _append_history(ships_data, now_str)
 

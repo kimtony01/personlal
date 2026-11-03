@@ -112,7 +112,12 @@ def risk_job():
 def ais_job():
     import collector
     import voyages
-    asyncio.run(collector.collect_and_save(CONFIG["schedule"]["ais_collect_seconds"]))
+    # AIS_SCOPE=straits: 감시 해협 구역만 구독 (CPU 가 작은 서버에서 전 세계 수신이 다른 작업을 막지 않도록)
+    boxes = None
+    if settings.AIS_SCOPE == "straits":
+        boxes = [[[r["ais_box"]["lat"][0], r["ais_box"]["lon"][0]], [r["ais_box"]["lat"][1], r["ais_box"]["lon"][1]]]
+                 for r in ROUTE_DB.values()]
+    asyncio.run(collector.collect_and_save(CONFIG["schedule"]["ais_collect_seconds"], boxes))
     # 등록된 운항 선박은 MMSI 로 따로 구독해 위치를 더 확실히 잡음
     mmsis = voyages.tracked_mmsis()
     if mmsis:

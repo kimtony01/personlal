@@ -33,6 +33,9 @@ DB_PATH = Path(os.getenv("RISK_DB_PATH", BASE_DIR / "risk_monitor.db"))
 SHIP_DATA_PATH = BASE_DIR / "ship_data.json"
 SHIP_HISTORY_PATH = BASE_DIR / "ship_history.json"
 
+# AIS 수집 범위: global(전 세계, 기본) / straits(감시 해협 구역만)
+AIS_SCOPE = os.getenv("AIS_SCOPE", "global").lower()
+
 # 0 이면 웹 서버만 띄우고 스케줄러는 실행하지 않음 (예: 별도 프로세스로 돌릴 때)
 SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "1") != "0"
 
