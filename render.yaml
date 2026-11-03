@@ -14,9 +14,9 @@ services:
         value: 3.12.8
       - key: TZ
         value: Asia/Seoul
-      # 무료 인스턴스(CPU 0.1)에서 전 세계 AIS 수신은 CPU 를 다 써서 페이지가 멈추므로 해협 구역만
-      - key: AIS_SCOPE
-        value: straits
+      # 화면만 담당. 수집·위험 계산·경보 메일은 GitHub Actions(.github/workflows/monitor.yml)가 1시간마다 실행
+      - key: SCHEDULER_ENABLED
+        value: "0"
       - key: DATABASE_URL
         sync: false
       - key: NEWSAPI_KEY
