@@ -1,6 +1,1 @@
 .env
-__pycache__/
-risk_monitor.db
-risk_monitor.db-*
-app.log
-.env.render
