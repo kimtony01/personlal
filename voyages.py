@@ -14,6 +14,11 @@ from straits import LEVELS, STRAITS
 
 log = logging.getLogger("voyages")
 ARRIVAL_NM = 30
+# 해협을 피해 갈 바닷길이 없을 때(예: 페르시아만 안 항구) 제시할 하역항 변경안 — 공개된 파이프라인 우회로
+DEST_CHANGE = {
+    "hormuz": [("푸자이라항", "UAE 하브샨–푸자이라 원유 파이프라인으로 호르무즈 밖에서 선적·하역"),
+               ("얀부항", "사우디 동서(East-West) 원유 파이프라인으로 홍해 쪽에서 선적·하역")],
+}
 
 
 def bearing(lat1, lon1, lat2, lon2):
@@ -89,7 +94,8 @@ def evaluate(v, levels=None, max_age_h=72, max_detour=2.0):
     levels = levels or strait_levels()
     now = datetime.now()
     dest = PORT_DB[v["dest"]]
-    pos = ship_position(v.get("mmsi"))
+    # 예시(데모) 선박은 위치를 직접 넣어 줌. 실제 선박은 AIS 기록에서
+    pos = v.get("position") or ship_position(v.get("mmsi"))
     position, est = None, None
     if pos:
         age_h = (now - datetime.strptime(pos["seen_at"], "%Y-%m-%d %H:%M:%S")).total_seconds() / 3600
@@ -136,7 +142,24 @@ def evaluate(v, levels=None, max_age_h=72, max_detour=2.0):
                 "distance_nm": r["distance_nm"], "days": round(alt_days, 1),
                 "delta_days": round(alt_days - days, 1), "straits": alt_straits,
                 "max_level": max([s["level"] or 0 for s in alt_straits], default=0)})
-            banned += [s for s in r["straits"] if s not in banned]
+            new = [s for s in r["straits"] if s not in banned]
+            if not new:   # 더 피할 해협이 없으면 다음 대안은 같은 경로라 중단
+                break
+            banned += new
+        # 바닷길로 피할 수 없으면 하역항 변경안
+        if not alternatives:
+            for sid in risky:
+                for port, note in DEST_CHANGE.get(sid, []):
+                    r = find_route(start, port, banned_straits=risky)
+                    if not r:
+                        continue
+                    alt_straits = _straits_info(r["straits"], levels)
+                    alt_days = r["distance_nm"] / (v["speed_kn"] * 24)
+                    alternatives.append({
+                        "label": f"하역항 변경: {port}", "note": note, "points": [list(p[:2]) for p in r["points"]],
+                        "distance_nm": r["distance_nm"], "days": round(alt_days, 1),
+                        "delta_days": round(alt_days - days, 1), "straits": alt_straits,
+                        "max_level": max([s["level"] or 0 for s in alt_straits], default=0)})
         # 위험이 낮은 순 → 빠른 순
         alternatives.sort(key=lambda a: (a["max_level"], a["days"]))
 

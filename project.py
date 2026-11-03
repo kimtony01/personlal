@@ -47,6 +47,27 @@ SAMPLE_ROUTES = {"hormuz": ("담맘항", "울산항"), "suez": ("부산항", "�
                  "malacca": ("부산항", "뭄바이항"), "panama": ("부산항", "뉴욕항")}
 BLUE, ALT_COLORS = "#2563eb", ["#ea580c", "#16a34a", "#9333ea"]
 
+# 예시(데모) 선박: 위치·지나온 길은 가상, 앞으로 지날 해협의 신호등은 실제 데이터. DB에 저장하지 않고 메일도 보내지 않음
+DEMO_SHIPS = [
+    {"id": "demo_hormuz", "ship_name": "예시 유조선", "origin": "울산항", "dest": "담맘항", "speed_kn": 13.0,
+     "pos": (21.6, 61.8, 318),
+     "track": [(35.45, 129.45), (34.6, 128.9), (31.0, 124.5), (24.0, 119.8), (17.0, 113.0), (7.0, 109.0),
+               (1.3, 104.4), (2.0, 102.0), (5.0, 98.5), (6.3, 94.8), (5.7, 80.6), (12.0, 70.0), (21.6, 61.8)]},
+    {"id": "demo_suez", "ship_name": "예시 컨테이너선", "origin": "싱가포르항", "dest": "로테르담항", "speed_kn": 16.0,
+     "pos": (12.8, 58.5, 262),
+     "track": [(1.2, 103.7), (2.0, 102.0), (3.2, 100.6), (5.0, 98.5), (6.3, 94.8), (5.7, 80.6), (8.0, 73.5),
+               (12.8, 58.5)]},
+]
+
+
+def demo_voyage(d):
+    lat, lon, cog = d["pos"]
+    seen = (datetime.now() - timedelta(minutes=20)).strftime("%Y-%m-%d %H:%M:%S")
+    return {"id": d["id"], "ship_name": d["ship_name"], "origin": d["origin"], "dest": d["dest"],
+            "speed_kn": d["speed_kn"], "mmsi": None, "recipients": "", "demo": True,
+            "position": {"lat": lat, "lon": lon, "sog": d["speed_kn"], "cog": cog, "seen_at": seen},
+            "track": [{"lat": a, "lon": o} for a, o in d["track"]]}
+
 # -------------------------------------------------------------
 # 스타일
 # -------------------------------------------------------------
@@ -183,7 +204,12 @@ def summarize_news(items):
 # -------------------------------------------------------------
 st.sidebar.markdown("### 🚢 내 선박")
 active = db.list_voyages()
-voyage_opts = {None: "선택 안 함"} | {v["id"]: f"{v['ship_name']} · {v['origin']}→{v['dest']}" for v in active}
+demo_on = st.sidebar.toggle("🎬 예시 선박 보기", value=True, key="demo_on",
+                            help="가상의 배가 호르무즈·수에즈를 지나는 상황. 신호등은 실제 해협 데이터로 판단하고, 메일은 보내지 않습니다.")
+demos = [demo_voyage(d) for d in DEMO_SHIPS] if demo_on else []
+choices = demos + active
+voyage_opts = {None: "선택 안 함"} | {v["id"]: ("🎬 " if v.get("demo") else "") +
+                                     f"{v['ship_name']} · {v['origin']}→{v['dest']}" for v in choices}
 # 처음 열었을 때는 가장 최근 등록 선박을 선택
 default_vid = st.session_state.get("voyage_id", "unset")
 sel_vid = st.sidebar.selectbox("추적 중인 선박", list(voyage_opts), format_func=voyage_opts.get,
@@ -192,8 +218,10 @@ sel_vid = st.sidebar.selectbox("추적 중인 선박", list(voyage_opts), format
 if st.session_state.get("voyage_id", "unset") != sel_vid:
     st.session_state["strait_clicked"] = False   # 다른 배를 고르면 그 배의 항로 기준으로 다시
 st.session_state["voyage_id"] = sel_vid
-voyage = next((v for v in active if v["id"] == sel_vid), None)
-if voyage:
+voyage = next((v for v in choices if v["id"] == sel_vid), None)
+if voyage and voyage.get("demo"):
+    st.sidebar.caption("예시 선박 — 위치는 가상, 앞으로 지날 해협의 신호등은 실제 데이터 · 메일 안 보냄")
+elif voyage:
     st.sidebar.caption(f"MMSI {voyage['mmsi'] or '없음 (출발항 기준 계산)'} · 속력 {voyage['speed_kn']}노트 · "
                        f"알림 {voyage['recipients'] or '없음'}")
     if st.sidebar.button("운항 종료", width="stretch"):
@@ -386,9 +414,9 @@ def view_bounds(lines, pad=0.12, aspect=2.0):
     return clon, [clon - dlon / 2, clon + dlon / 2], lat_rng
 
 
-def ship_shape(lat, lon, heading, pts):
+def ship_shape(lat, lon, heading, lines):
     """진행 방향으로 회전한 작은 배 모양(뾰족한 뱃머리) 꼭짓점. 크기는 지도에 보이는 항로 범위에 맞춤"""
-    _, lon_rng, lat_rng = view_bounds([pts])
+    _, lon_rng, lat_rng = view_bounds(lines)   # 지도에 실제로 보이는 범위에 맞춘 크기
     span = 140 if lon_rng is None else max(lat_rng[1] - lat_rng[0],
                                             (lon_rng[1] - lon_rng[0]) * math.cos(math.radians(lat)), 3)
     size = span * 0.013
@@ -432,10 +460,10 @@ with map_col:
     fig = go.Figure()
     if ok_ev:
         risky_ahead = any((s["level"] or 0) >= 1 for s in ev["straits"])
-        track = db.get_tracks(voyage["mmsi"], 200) if voyage.get("mmsi") else []
+        track = voyage.get("track") or (db.get_tracks(voyage["mmsi"], 200) if voyage.get("mmsi") else [])
         if len(track) >= 2:
             fig.add_trace(go.Scattergeo(lat=[t["lat"] for t in track], lon=[t["lon"] for t in track], mode="lines",
-                                        line=dict(width=3, color="#94a3b8"), name="지나온 길(AIS)", hoverinfo="name"))
+                                        line=dict(width=3, color="#94a3b8"), name="지나온 길" + ("(예시)" if voyage.get("demo") else "(AIS)"), hoverinfo="name"))
         if risky_ahead:
             for i, a in enumerate(ev["alternatives"][:2]):
                 fig.add_trace(go.Scattergeo(lat=[p[0] for p in a["points"]], lon=[p[1] for p in a["points"]],
@@ -455,7 +483,14 @@ with map_col:
         here = pts[0]
         live = ev["source"] != "origin"
         label = {"ais": "현재 위치(AIS)", "estimated": "현재 위치(추정)", "origin": "출발항 기준(위치 미수신)"}[ev["source"]]
-        hull_lat, hull_lon = ship_shape(here[0], here[1], ev["heading"], pts)
+        if voyage.get("demo"):
+            label = "현재 위치(예시)"
+        lines = [[tuple(p[:2]) for p in pts]]
+        if len(track) >= 2:
+            lines.append([(t["lat"], t["lon"]) for t in track])
+        for a in (ev["alternatives"][:2] if risky_ahead else []):
+            lines.append([tuple(p[:2]) for p in a["points"]])
+        hull_lat, hull_lon = ship_shape(here[0], here[1], ev["heading"], lines)
         # 실제 위치 = 진한 배, 위치를 아직 못 받음(출발항 기준) = 흰 배에 진한 테두리
         fig.add_trace(go.Scattergeo(lat=hull_lat, lon=hull_lon, mode="lines", fill="toself",
                                     fillcolor="#0f172a" if live else "#ffffff",
@@ -465,11 +500,6 @@ with map_col:
         fig.add_trace(go.Scattergeo(lat=[label_lat], lon=[here[1]], mode="text", text=[voyage["ship_name"]],
                                     textposition="top center", textfont=dict(color="#0f172a", size=12),
                                     hoverinfo="skip", showlegend=False))
-        lines = [[tuple(p[:2]) for p in pts]]
-        if len(track) >= 2:
-            lines.append([(t["lat"], t["lon"]) for t in track])
-        for a in (ev["alternatives"][:2] if risky_ahead else []):
-            lines.append([tuple(p[:2]) for p in a["points"]])
         base_layout(fig, lines=lines)
     else:
         sample = SAMPLE_ROUTES.get(sid)
@@ -494,7 +524,7 @@ with info_col:
         ahead = " ".join(f"{pill(s['level'], s['name'])}" for s in ev["straits"]) or \
             "<span class='muted'>감시 해협 없음</span>"
         st.markdown(f"""
-<div class="card"><h4>🚢 {voyage['ship_name']}</h4>
+<div class="card"><h4>🚢 {voyage['ship_name']}{" <span class='pill' style='background:#ede9fe;color:#6d28d9'>예시</span>" if voyage.get("demo") else ""}</h4>
   <div class="muted">{voyage['origin']} → {voyage['dest']}</div>
   <div class="stats">
     <div><span>남은 거리</span><b>{ev['distance_nm']:,}해리</b></div>
@@ -508,7 +538,8 @@ with info_col:
             best = ev["alternatives"][0]
             st.markdown(f"""<div class="card rec"><span class="muted">🧭 대체 항로 추천</span>
   <div class="big">{best['label']}</div><div class="muted">{best['delta_days']:+.1f}일 · {risky[0]['name']}
-  {LEVELS[risky[0]['level']]['label']} 회피</div></div>""", unsafe_allow_html=True)
+  {LEVELS[risky[0]['level']]['label']} 회피{('<br>' + best['note']) if best.get('note') else ''}</div></div>""",
+                        unsafe_allow_html=True)
         elif risky:
             st.warning("위험 해협을 피하는 대체 항로를 찾지 못했습니다.")
         else:
