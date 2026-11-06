@@ -1,0 +1,51 @@
+name: 앱 깨워 두기 (Streamlit 잠들기 · 자동 실행 중지 방지)
+
+on:
+  schedule:
+    # 8시간마다 (Streamlit은 12시간 동안 방문이 없으면 앱을 재움)
+    - cron: "17 */8 * * *"
+  workflow_dispatch: {}   # Actions 탭에서 수동 실행 버튼
+
+permissions:
+  actions: write   # 60일 무활동 자동 중지를 막으려고 워크플로를 다시 켜는 데 필요
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+
+      # 주소만 부르면 방문으로 안 쳐서, 실제 브라우저로 열고 잠들어 있으면 깨우기 버튼을 누름
+      - name: 사이트 열기 → 잠들어 있으면 깨우기
+        run: |
+          python - <<'EOF'
+          from playwright.sync_api import sync_playwright
+          URL = "https://maritime-route-risk.streamlit.app/"
+          with sync_playwright() as p:
+              b = p.chromium.launch()
+              pg = b.new_page()
+              pg.goto(URL, timeout=120000)
+              pg.wait_for_timeout(10000)
+              btn = pg.get_by_text("get this app back up")
+              if btn.count():
+                  print("잠들어 있음 → 깨우는 중")
+                  btn.first.click()
+                  pg.wait_for_timeout(120000)
+              else:
+                  print("깨어 있음")
+                  pg.wait_for_timeout(30000)
+              b.close()
+          EOF
+
+      # 공개 저장소는 60일 동안 커밋이 없으면 예약 실행이 자동으로 꺼짐 → 매번 다시 켜 둠
+      - name: 예약 실행 다시 켜 두기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow enable auto_monitor.yml -R "$GITHUB_REPOSITORY"
+          gh workflow enable keep_awake.yml -R "$GITHUB_REPOSITORY"
