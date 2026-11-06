@@ -49,3 +49,4 @@ jobs:
         run: |
           gh workflow enable auto_monitor.yml -R "$GITHUB_REPOSITORY"
           gh workflow enable keep_awake.yml -R "$GITHUB_REPOSITORY"
+          gh workflow enable ping_bof.yml -R "$GITHUB_REPOSITORY"
